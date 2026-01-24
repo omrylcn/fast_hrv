@@ -1,0 +1,18 @@
+[package]
+name = "fast_hrv_rs"
+version = "0.1.0"
+edition = "2024"
+description = "Fast HRV analysis in Rust"
+
+[features]
+default = []
+parallel = ["rayon"]   # Multi-threading with rayon
+simd = []              # SIMD optimizations (AVX/SSE)
+all = ["parallel", "simd"]
+
+[dependencies]
+ordered-float = "4.2"  # For f64 in BTreeMap (sliding window median)
+rayon = { version = "1.10", optional = true }
+
+[dev-dependencies]
+approx = "0.5"
