@@ -20,48 +20,81 @@ pub struct SosSection {
     pub a2: f64,
 }
 
-/// Apply a single SOS section using Direct Form II Transposed
-fn apply_sos_section(section: &SosSection, signal: &[f64]) -> Vec<f64> {
-    let n = signal.len();
-    let mut output = vec![0.0; n];
+/// Apply a single SOS section using Direct Form II Transposed (in-place output)
+#[inline(always)]
+fn apply_sos_section_inplace(section: &SosSection, input: &[f64], output: &mut [f64]) {
+    let n = input.len();
+    let (b0, b1, b2, a1, a2) = (section.b0, section.b1, section.b2, section.a1, section.a2);
     let mut z1 = 0.0;
     let mut z2 = 0.0;
 
     for i in 0..n {
-        let x = signal[i];
-        let y = section.b0 * x + z1;
-        z1 = section.b1 * x - section.a1 * y + z2;
-        z2 = section.b2 * x - section.a2 * y;
+        let x = input[i];
+        let y = b0 * x + z1;
+        z1 = b1 * x - a1 * y + z2;
+        z2 = b2 * x - a2 * y;
         output[i] = y;
     }
-
-    output
 }
 
-/// Apply SOS filter (cascade of second-order sections)
-fn sosfilt(sos: &[SosSection], signal: &[f64]) -> Vec<f64> {
-    let mut result = signal.to_vec();
-    for section in sos {
-        result = apply_sos_section(section, &result);
+/// Apply SOS filter (cascade of second-order sections) - optimized with double buffering
+fn sosfilt_inplace(sos: &[SosSection], input: &[f64], buf_a: &mut [f64], buf_b: &mut [f64]) {
+    if sos.is_empty() {
+        buf_a.copy_from_slice(input);
+        return;
     }
-    result
+
+    // First section: input -> buf_a
+    apply_sos_section_inplace(&sos[0], input, buf_a);
+
+    // Remaining sections: alternate between buffers
+    let mut use_a = true;
+    for section in &sos[1..] {
+        if use_a {
+            apply_sos_section_inplace(section, buf_a, buf_b);
+        } else {
+            apply_sos_section_inplace(section, buf_b, buf_a);
+        }
+        use_a = !use_a;
+    }
+
+    // Ensure result is in buf_a
+    if !use_a && sos.len() > 1 {
+        buf_a.copy_from_slice(buf_b);
+    }
 }
 
-/// Apply zero-phase filtering (forward-backward)
+/// Reverse array in-place
+#[inline]
+fn reverse_inplace(arr: &mut [f64]) {
+    let n = arr.len();
+    let half = n / 2;
+    for i in 0..half {
+        arr.swap(i, n - 1 - i);
+    }
+}
+
+/// Apply zero-phase filtering (forward-backward) - optimized
 fn sosfiltfilt(sos: &[SosSection], signal: &[f64]) -> Vec<f64> {
+    let n = signal.len();
+    let mut buf_a = vec![0.0; n];
+    let mut buf_b = vec![0.0; n];
+
     // Forward pass
-    let mut result = sosfilt(sos, signal);
+    sosfilt_inplace(sos, signal, &mut buf_a, &mut buf_b);
 
-    // Reverse
-    result.reverse();
+    // Reverse in-place
+    reverse_inplace(&mut buf_a);
 
-    // Backward pass
-    result = sosfilt(sos, &result);
+    // Backward pass (reuse buf_b)
+    buf_b.iter_mut().for_each(|x| *x = 0.0);
+    let mut buf_c = vec![0.0; n];
+    sosfilt_inplace(sos, &buf_a, &mut buf_b, &mut buf_c);
 
     // Reverse back
-    result.reverse();
+    reverse_inplace(&mut buf_b);
 
-    result
+    buf_b
 }
 
 /// Design Butterworth bandpass filter (simplified for ECG: 0.5-40 Hz)
@@ -449,9 +482,11 @@ mod tests {
             a1: 0.0, a2: 0.0,
         }];
         let signal = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-        let filtered = sosfilt(&sos, &signal);
+        let mut buf_a = vec![0.0; signal.len()];
+        let mut buf_b = vec![0.0; signal.len()];
+        sosfilt_inplace(&sos, &signal, &mut buf_a, &mut buf_b);
 
-        for (f, s) in filtered.iter().zip(&signal) {
+        for (f, s) in buf_a.iter().zip(&signal) {
             assert!((f - s).abs() < 1e-10);
         }
     }

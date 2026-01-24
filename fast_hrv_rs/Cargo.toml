@@ -4,15 +4,23 @@ version = "0.1.0"
 edition = "2024"
 description = "Fast HRV analysis in Rust"
 
+[lib]
+name = "fast_hrv_rs"
+crate-type = ["cdylib", "rlib"]  # cdylib for Python, rlib for Rust
+
 [features]
 default = []
-parallel = ["rayon"]   # Multi-threading with rayon
-simd = []              # SIMD optimizations (AVX/SSE)
+parallel = ["rayon"]
+simd = []
+python = ["pyo3", "numpy"]  # Python bindings
 all = ["parallel", "simd"]
 
 [dependencies]
-ordered-float = "4.2"  # For f64 in BTreeMap (sliding window median)
+ordered-float = "4.2"
 rayon = { version = "1.10", optional = true }
+serde_json = "1.0"
+pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
+numpy = { version = "0.22", optional = true }
 
 [dev-dependencies]
 approx = "0.5"

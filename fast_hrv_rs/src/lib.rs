@@ -1,10 +1,21 @@
 //! fast_hrv_rs - Fast HRV Analysis in Rust
 //!
 //! Python fast_hrv modülünün Rust implementasyonu
+//!
+//! ## Features
+//! - `simd` - SIMD optimizations (AVX/SSE auto-vectorization)
+//! - `parallel` - Multi-threaded processing with rayon
+//! - `python` - Python bindings via PyO3
 
 pub mod ecg;
 pub mod hrv;
 pub mod peaks;
+
+#[cfg(feature = "simd")]
+pub mod simd;
+
+#[cfg(feature = "python")]
+mod python;
 
 // Re-export HRV functions
 pub use hrv::*;
