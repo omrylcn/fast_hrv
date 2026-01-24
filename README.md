@@ -292,7 +292,6 @@ NeuroKit2 method:
 **NeuroKit2 Slowness Reasons:**
 - Pure Python loops
 - DataFrame overhead (pandas)
-- Unnecessary copies
 - General-purpose design
 
 **fast_hrv Optimizations:**
