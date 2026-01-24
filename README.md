@@ -50,10 +50,10 @@ Rust:       ▌                                           7.5 ms (554x faster)
 
 ```bash
 # Dependencies
-pip install numpy scipy neurokit2
+uv pip install numpy scipy neurokit2
 
 # For Numba (optional, but recommended)
-pip install numba
+uv pip install numba
 ```
 
 ### fast_hrv_rs (Rust → Python binding)
