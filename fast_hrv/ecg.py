@@ -8,16 +8,16 @@ Optimized ECG processing for HRV analysis.
 import numpy as np
 from typing import Dict, Tuple, Optional, Any
 
-from neurokit2.ecg import ecg_clean, ecg_peaks
+from neurokit2.ecg import ecg_clean
 
 from .utils import sanitize_signal
+from .peaks import ecg_peaks as _ecg_peaks
 
 
 def process_ecg(
     ecg_signal: np.ndarray,
     sampling_rate: int = 512,
     clean_method: str = "neurokit",
-    peak_method: str = "neurokit",
     correct_artifacts: bool = True
 ) -> Dict[str, Any]:
     """
@@ -33,8 +33,6 @@ def process_ecg(
         Sampling frequency in Hz (default: 512)
     clean_method : str
         Cleaning method (default: "neurokit")
-    peak_method : str
-        Peak detection method (default: "neurokit")
     correct_artifacts : bool
         Whether to correct peak artifacts (default: True)
 
@@ -66,11 +64,10 @@ def process_ecg(
         method=clean_method
     )
 
-    # 3. Detect R-peaks
-    _, info = ecg_peaks(
+    # 3. Detect R-peaks + Correct artifacts (optimized)
+    _, info = _ecg_peaks(
         ecg_cleaned,
         sampling_rate=sampling_rate,
-        method=peak_method,
         correct_artifacts=correct_artifacts
     )
     rpeaks = info["ECG_R_Peaks"]
