@@ -1,46 +1,26 @@
 # fast_hrv
 
-**High-performance HRV (Heart Rate Variability) analysis ecosystem.**
+Fast HRV analysis library. R-peak detection, artifact correction, and HRV metrics from ECG signals.
 
-A high-performance alternative to NeuroKit2 for detecting R-peaks from ECG signals, correcting artifacts, and computing HRV metrics.
+## Performance
 
-## Why fast_hrv?
+Benchmark: 512 Hz, 75 BPM synthetic ECG (Apple M1, `neurokit2.ecg_simulate()`)
 
-NeuroKit2 is comprehensive but slow. An optimized alternative is needed for real-time applications and large datasets.
-
-```
-NeuroKit2:  ████████████████████████████████████████  4139 ms (360s ECG)
-fast_hrv:   █                                            11 ms (378x faster)
-Rust:       ▌                                           7.5 ms (554x faster)
-```
-
-## Performance Comparison
-
-| Duration | NeuroKit2 | fast_hrv (NumPy) | fast_hrv (Numba) | Rust | Speed Gain |
-|----------|-----------|------------------|------------------|------|------------|
-| 30s  | 356 ms    | ~50 ms           | 3.6 ms           | 0.5 ms | **713x** |
-| 60s  | 685 ms    | ~80 ms           | 3.9 ms           | 1.1 ms | **646x** |
-| 180s | 2035 ms   | ~200 ms          | 7.1 ms           | 3.5 ms | **582x** |
-| 360s | 4139 ms   | ~400 ms          | 10.9 ms          | 7.5 ms | **554x** |
+| Duration | NeuroKit2 | fast_hrv (NumPy) | fast_hrv (Numba) | Rust | Speedup |
+|----------|-----------|------------------|------------------|------|---------|
+| 30s  | 114 ms | 3 ms  | 2 ms  | 0.5 ms | ~228x |
+| 60s  | 220 ms | 3 ms  | 3 ms  | 2 ms   | ~110x |
+| 180s | 590 ms | 7 ms  | 6 ms  | 3 ms   | ~200x |
+| 360s | 1163 ms | 13 ms | 12 ms | 6.5 ms | ~180x |
 
 ## Options
 
-| Option | Language | Speed | Advantage | Disadvantage |
-|--------|----------|-------|-----------|--------------|
-| **fast_hrv (NumPy)** | Pure Python | 10x | Few dependencies, easy to debug | Not as fast as JIT |
-| **fast_hrv (Numba)** | Python + JIT | 100x | Very fast, Python syntax | First call slow (JIT) |
-| **fast_hrv_rs (binding)** | Python → Rust | 500x+ | Fastest, Python API | Requires Rust compilation |
-| **fast_hrv_rs (native)** | Pure Rust | 500x+ | Embedded, real-time | Requires Rust knowledge |
-
-### Which Option Should I Use?
-
-| Use Case | Recommendation |
-|----------|----------------|
-| Jupyter notebook, quick prototyping | **fast_hrv (NumPy)** |
-| Batch processing, many files | **fast_hrv (Numba)** |
-| Production API, high throughput | **fast_hrv_rs (Python binding)** |
-| Embedded, wearable, real-time | **fast_hrv_rs (Native Rust)** |
-| NeuroKit2 compatibility required | **fast_hrv (NumPy/Numba)** |
+| Option | Speed | Note |
+|--------|-------|------|
+| **fast_hrv (NumPy)** | ~90x | Few dependencies |
+| **fast_hrv (Numba)** | ~100x | First call slow (JIT warmup) |
+| **fast_hrv_rs (binding)** | ~180x | Requires Rust compilation |
+| **fast_hrv_rs (native)** | ~180x | Requires Rust knowledge |
 
 ---
 
@@ -262,15 +242,14 @@ compute_poincare(&rr);
 
 ## Accuracy
 
-Same results as NeuroKit2 (30s synthetic ECG):
+Comparison with NeuroKit2 (360s synthetic ECG):
 
-| Metric | NeuroKit2 | fast_hrv | Rust | Difference |
-|--------|-----------|----------|------|------------|
-| N Peaks | 37 | 37 | 37 | **0%** |
-| Mean HR | 74.68 | 74.92 | 74.92 | 0.32% |
-| SDNN | 45.65 | 45.65 | 45.65 | **0%** |
-| RMSSD | 78.66 | 78.66 | 78.66 | **0%** |
-| pNN50 | 62.86 | 62.86 | 62.86 | **0%** |
+| Metric | NeuroKit2 | Rust | Diff |
+|--------|-----------|------|------|
+| N Peaks | 450 | 450 | 0 |
+| SDNN | 10.94 ms | 10.95 ms | 0.01% |
+| RMSSD | 11.04 ms | 11.04 ms | 0.03% |
+| pNN50 | 0.00% | 0.00% | 0 |
 
 ---
 
@@ -321,11 +300,11 @@ for i in (0..n).step_by(4) {
 }
 ```
 
-### Rust vs Numba: Why Is the Rust Binding Faster?
+### Rust vs Numba
 
-Benchmark results (360s ECG):
-- **Numba**: 10.2 ms
-- **Rust Binding**: 5.6 ms (**1.8x faster**)
+360s ECG benchmark:
+- **Numba**: 12 ms
+- **Rust Binding**: 6.5 ms (~1.8x)
 
 | Factor | Numba | Rust | Impact |
 |--------|-------|------|--------|
