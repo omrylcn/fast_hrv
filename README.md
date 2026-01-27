@@ -4,7 +4,7 @@ Fast HRV analysis library. R-peak detection, artifact correction, and HRV metric
 
 ## Performance
 
-Benchmark: 512 Hz, 75 BPM synthetic ECG (Apple M1, `neurokit2.ecg_simulate()`)
+Benchmark: 512 Hz, 75 BPM synthetic ECG (`neurokit2.ecg_simulate()`)
 
 | Duration | NeuroKit2 | fast_hrv (NumPy) | fast_hrv (Numba) | Rust | Speedup |
 |----------|-----------|------------------|------------------|------|---------|
