@@ -44,7 +44,10 @@ pub mod simd;
 #[cfg(feature = "python")]
 mod python;
 
-pub use detect::{DetectorFilter, ElgendiConfig, elgendi_peaks};
+pub use detect::{
+    DetectorFilter, ElgendiConfig, Polarity, RefineConfig, RefinedPeaks, elgendi_peaks,
+    refine_peaks,
+};
 pub use ecg::{
     EcgFilterConfig, EcgResult, EcgStats, EcgStreamFilter, compute_quality, compute_stats,
     ecg_clean, ecg_clean_causal, ecg_clean_neurokit, ecg_clean_zero_phase, process_ecg,
@@ -59,5 +62,8 @@ pub use peaks::{
     Artifacts, KubiosOutput, KubiosParams, detect_artifacts, ecg_peaks, find_peaks,
     find_peaks_default, fix_peaks, fix_peaks_default, fix_peaks_with,
 };
-pub use report::{Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks, try_rri_from_peaks};
+pub use report::{
+    Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks, rri_from_positions, rri_from_times,
+    try_rri_from_peaks, try_rri_from_times,
+};
 pub use time_domain::{TimeDomain, time_domain};

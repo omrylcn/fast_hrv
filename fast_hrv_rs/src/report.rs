@@ -133,6 +133,42 @@ pub fn try_rri_from_peaks(peaks: &[usize], sampling_rate: u32) -> Result<Vec<f64
     Ok(rri_from_peaks(peaks, sampling_rate))
 }
 
+/// NN intervals (ms) from sub-sample R-peak positions (in samples, e.g.
+/// [`crate::detect::RefinedPeaks::positions`]) and the sampling rate.
+///
+/// Same conventions as [`rri_from_peaks`]: a non-increasing pair, a non-finite position or an invalid
+/// `sampling_rate` gives `NaN` for that interval (no panic).
+pub fn rri_from_positions(positions: &[f64], sampling_rate: f64) -> Vec<f64> {
+    let ok_fs = sampling_rate.is_finite() && sampling_rate > 0.0;
+    positions
+        .windows(2)
+        .map(|w| {
+            if ok_fs && w[0].is_finite() && w[1].is_finite() && w[1] > w[0] {
+                (w[1] - w[0]) * 1000.0 / sampling_rate
+            } else {
+                f64::NAN
+            }
+        })
+        .collect()
+}
+
+/// NN intervals (ms) from R-peak times in seconds (e.g. [`crate::detect::RefinedPeaks::times_s`]).
+/// A non-increasing or non-finite pair gives `NaN` for that interval.
+pub fn rri_from_times(times_s: &[f64]) -> Vec<f64> {
+    rri_from_positions(times_s, 1.0)
+}
+
+/// [`rri_from_times`] with validation: times must be finite and strictly increasing.
+pub fn try_rri_from_times(times_s: &[f64]) -> Result<Vec<f64>, HrvError> {
+    if times_s.iter().any(|t| !t.is_finite()) {
+        return Err(HrvError::NonFinite);
+    }
+    if let Some(i) = times_s.windows(2).position(|w| w[1] <= w[0]) {
+        return Err(HrvError::UnsortedPeaks { index: i + 1 });
+    }
+    Ok(rri_from_times(times_s))
+}
+
 impl HrvReport {
     /// Report with every metric NaN.
     pub fn nan(n: usize) -> Self {

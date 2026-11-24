@@ -3,6 +3,9 @@
 //! - [`elgendi_peaks`]: the Elgendi two-moving-average QRS detector (8–20 Hz Butterworth band-pass,
 //!   squaring, ~97 ms and ~611 ms moving averages, offset β·mean, block threshold), with presets that
 //!   reproduce NeuroKit2's `elgendi2010` and `elgendi2013` exactly.
+//! - [`refine_peaks`]: moves candidate peaks (from any detector) onto the R extremum of the clean
+//!   signal within ±50 ms and adds 3-point parabolic interpolation (sub-sample positions). Use
+//!   [`crate::rri_from_positions`] / [`crate::rri_from_times`] for RR intervals from them.
 //!
 //! All durations are given in seconds and converted with the sampling rate, so the detector is not
 //! tied to one sampling rate. Functions are stateless: the same input always gives the same peaks.
@@ -46,7 +49,7 @@ fn numpy_mean(x: &[f64]) -> f64 {
 pub enum DetectorFilter {
     /// Causal `sosfilt` with the initial state `sosfilt_zi · mean(signal)`. This is NeuroKit2's
     /// `signal_filter(method="butterworth_zi")`, used by `ecg_clean(method="elgendi2010")`. The
-    /// filter delay makes the raw detections late (see `refine_peaks`).
+    /// filter delay makes the raw detections late (see [`refine_peaks`]).
     Causal,
     /// Zero-phase `sosfiltfilt` (SciPy padding). Not NeuroKit2-compatible; removes the filter delay.
     ZeroPhase,
@@ -354,11 +357,176 @@ pub fn elgendi_detect(
 ///
 /// `signal` is a raw or cleaned ECG (any band containing 8–20 Hz). The returned indices are the
 /// detector's own fiducials; with the default causal filter they lie ~35–40 ms after the R peak of
-/// the clean signal. Use `refine_peaks` to move them onto the R maximum.
+/// the clean signal. Use [`refine_peaks`] to move them onto the R maximum.
 pub fn elgendi_peaks(signal: &[f64], fs: f64, cfg: &ElgendiConfig) -> Result<Vec<usize>, HrvError> {
     cfg.validate(fs)?;
     let filtered = elgendi_filter(signal, fs, cfg)?;
     elgendi_detect(&filtered, fs, cfg)
+}
+
+// =============================================================================
+// R-peak refinement (local extremum + parabolic interpolation)
+// =============================================================================
+
+/// Which extremum [`refine_peaks`] looks for on the clean signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Polarity {
+    /// Local maximum of `x` (upright R wave).
+    Positive,
+    /// Local minimum of `x` (inverted lead / electrode placement).
+    Negative,
+    /// Local maximum of `|x|`, decided per beat. Robust to a polarity change, but may jump to a
+    /// deep S (or Q) wave when it is larger than R.
+    Absolute,
+    /// One sign for the whole call (i.e. per processed window): each candidate votes with the sign
+    /// of the largest `|x|` in its search window; the majority wins (ties → positive). Then as
+    /// [`Polarity::Positive`] or [`Polarity::Negative`].
+    Auto,
+}
+
+/// Parameters of [`refine_peaks`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RefineConfig {
+    /// Search half-window around each candidate (s): the extremum is searched in
+    /// `[c − w, c + w]`. Default 0.05 s (±50 ms; literature recommendation, see `CHANGES-DETECT.md`).
+    /// The default Elgendi detector is ~35–40 ms late, so ±50 ms covers it; NeuroKit2's
+    /// `elgendi2010` preset is ~75–85 ms late and needs ≥ 0.09 s.
+    pub half_window_s: f64,
+    /// Default [`Polarity::Auto`].
+    pub polarity: Polarity,
+    /// 3-point parabolic interpolation around the extremum (sub-sample position). Default `true`.
+    pub interpolate: bool,
+}
+
+impl Default for RefineConfig {
+    fn default() -> Self {
+        Self {
+            half_window_s: 0.05,
+            polarity: Polarity::Auto,
+            interpolate: true,
+        }
+    }
+}
+
+/// Refined R peaks.
+#[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct RefinedPeaks {
+    /// Sample index of the extremum of each peak (strictly increasing).
+    pub indices: Vec<usize>,
+    /// Sub-sample peak position in samples (`index + δ`, `|δ| ≤ 0.5`); equal to `indices` when
+    /// interpolation is off. Same length as `indices`.
+    pub positions: Vec<f64>,
+    /// Sign used: `+1` (maximum of `x`), `−1` (minimum of `x`) or `0` ([`Polarity::Absolute`]).
+    pub sign: f64,
+}
+
+impl RefinedPeaks {
+    /// Peak times in seconds (`position / fs`).
+    pub fn times_s(&self, fs: f64) -> Vec<f64> {
+        self.positions.iter().map(|p| p / fs).collect()
+    }
+}
+
+/// Vertex offset of the parabola through `(−1, y_m1)`, `(0, y0)`, `(1, y_p1)`:
+/// `δ = 0.5 · (y_m1 − y_p1) / (y_m1 − 2·y0 + y_p1)`, clamped to `[−0.5, 0.5]`. Returns 0 if the three
+/// points do not form a strict maximum (flat top or non-finite values).
+pub fn parabolic_offset(y_m1: f64, y0: f64, y_p1: f64) -> f64 {
+    let den = y_m1 - 2.0 * y0 + y_p1;
+    if !den.is_finite() || den >= 0.0 {
+        return 0.0;
+    }
+    let d = 0.5 * (y_m1 - y_p1) / den;
+    if d.is_finite() {
+        d.clamp(-0.5, 0.5)
+    } else {
+        0.0
+    }
+}
+
+fn search_bounds(c: usize, w: usize, n: usize) -> (usize, usize) {
+    (c.saturating_sub(w), (c + w).min(n - 1))
+}
+
+/// Majority sign of the largest `|x|` around each candidate (`+1` on ties or without candidates).
+pub fn auto_polarity(signal: &[f64], fs: f64, candidates: &[usize], half_window_s: f64) -> f64 {
+    let n = signal.len();
+    if n == 0 || !(fs.is_finite() && fs > 0.0) {
+        return 1.0;
+    }
+    let w = (half_window_s.max(0.0) * fs).round() as usize;
+    let mut votes: i64 = 0;
+    for &c in candidates.iter().filter(|&&c| c < n) {
+        let (lo, hi) = search_bounds(c, w, n);
+        let i = argmax_by(signal, lo, hi, f64::abs);
+        if signal[i] > 0.0 {
+            votes += 1;
+        } else if signal[i] < 0.0 {
+            votes -= 1;
+        }
+    }
+    if votes >= 0 { 1.0 } else { -1.0 }
+}
+
+/// Move candidate R peaks onto the R extremum of the clean signal, with sub-sample precision.
+///
+/// For each candidate `c` the extremum (see [`Polarity`]) of `signal` is searched in
+/// `[c − w, c + w]` (`w = round(half_window_s · fs)`, clipped to the signal), then a parabola is fitted
+/// through the extremum and its two neighbours (`t = (n + δ) / fs`). `signal` should be the clean,
+/// wide-band ECG (e.g. 0.5–40 Hz, [`crate::ecg_clean_zero_phase`]), not the detector band.
+///
+/// Candidates may come from any detector, unsorted; candidates outside the signal are ignored.
+/// Candidates that land on the same sample are merged. Errors: invalid `fs`, negative/non-finite
+/// window, non-finite signal.
+pub fn refine_peaks(
+    signal: &[f64],
+    fs: f64,
+    candidates: &[usize],
+    cfg: &RefineConfig,
+) -> Result<RefinedPeaks, HrvError> {
+    check_fs(fs)?;
+    if !(cfg.half_window_s.is_finite() && cfg.half_window_s >= 0.0) {
+        return Err(HrvError::InvalidParameter("half_window_s"));
+    }
+    check_finite(signal)?;
+    let n = signal.len();
+    let mut cands: Vec<usize> = candidates.iter().copied().filter(|&c| c < n).collect();
+    cands.sort_unstable();
+    cands.dedup();
+    let sign = match cfg.polarity {
+        Polarity::Positive => 1.0,
+        Polarity::Negative => -1.0,
+        Polarity::Absolute => 0.0,
+        Polarity::Auto => auto_polarity(signal, fs, &cands, cfg.half_window_s),
+    };
+    let value = |v: f64| if sign == 0.0 { v.abs() } else { sign * v };
+    let w = (cfg.half_window_s * fs).round() as usize;
+    let mut out = RefinedPeaks {
+        indices: Vec::with_capacity(cands.len()),
+        positions: Vec::with_capacity(cands.len()),
+        sign,
+    };
+    let mut pairs: Vec<(usize, f64)> = Vec::with_capacity(cands.len());
+    for &c in &cands {
+        let (lo, hi) = search_bounds(c, w, n);
+        let i = argmax_by(signal, lo, hi, value);
+        let delta = if cfg.interpolate && i > 0 && i + 1 < n {
+            parabolic_offset(value(signal[i - 1]), value(signal[i]), value(signal[i + 1]))
+        } else {
+            0.0
+        };
+        pairs.push((i, i as f64 + delta));
+    }
+    // Refined windows of increasing candidates can cross; keep the output sorted and unique.
+    pairs.sort_by_key(|p| p.0);
+    pairs.dedup_by_key(|p| p.0);
+    for (i, p) in pairs {
+        out.indices.push(i);
+        out.positions.push(p);
+    }
+    Ok(out)
 }
 
 // =============================================================================
@@ -416,6 +584,48 @@ mod tests {
         // the beat at 3 s is kept, the burst at 3.2 s dropped
         assert!(kept.iter().any(|&p| (1536..1536 + 41).contains(&p)));
         assert!(!kept.iter().any(|&p| (1638..1638 + 41).contains(&p)));
+    }
+
+    #[test]
+    fn parabola_vertex() {
+        // y = -(t - 0.3)^2 sampled at -1, 0, 1
+        let f = |t: f64| -(t - 0.3) * (t - 0.3);
+        assert!((parabolic_offset(f(-1.0), f(0.0), f(1.0)) - 0.3).abs() < 1e-12);
+        assert_eq!(parabolic_offset(1.0, 1.0, 1.0), 0.0);
+        assert_eq!(parabolic_offset(0.0, f64::NAN, 0.0), 0.0);
+        assert_eq!(parabolic_offset(2.0, 1.0, 0.0), 0.0); // not a maximum
+    }
+
+    #[test]
+    fn refine_edges_and_duplicates() {
+        let mut x = vec![0.0; 200];
+        x[50] = 1.0;
+        x[49] = 0.5;
+        x[51] = 0.5;
+        x[0] = -3.0;
+        let cfg = RefineConfig {
+            polarity: Polarity::Positive,
+            ..RefineConfig::default()
+        };
+        // two candidates landing on the same peak, one out of range, unsorted
+        let r = refine_peaks(&x, 512.0, &[60, 45, 1000], &cfg).unwrap();
+        assert_eq!(r.indices, vec![50]);
+        assert!((r.positions[0] - 50.0).abs() < 1e-12);
+        // absolute picks the larger |x| at the signal edge, no interpolation there
+        let abs = RefineConfig {
+            polarity: Polarity::Absolute,
+            ..cfg
+        };
+        let r = refine_peaks(&x, 512.0, &[5], &abs).unwrap();
+        assert_eq!((r.indices[0], r.positions[0]), (0, 0.0));
+        assert_eq!(auto_polarity(&x, 512.0, &[5], 0.05), -1.0);
+        assert!(refine_peaks(&x, 0.0, &[5], &cfg).is_err());
+        assert!(
+            refine_peaks(&[], 512.0, &[5], &cfg)
+                .unwrap()
+                .indices
+                .is_empty()
+        );
     }
 
     #[test]

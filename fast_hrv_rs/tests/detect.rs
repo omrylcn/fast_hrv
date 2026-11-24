@@ -148,3 +148,219 @@ fn elgendi_peaks_match_neurokit_before_refinement() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Synthetic ECG with known (sub-sample) R positions
+// ---------------------------------------------------------------------------------------------
+
+/// Deterministic pseudo-random numbers (SplitMix64) and Gaussian noise (Box–Muller).
+struct Rng(u64);
+
+impl Rng {
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+    fn uniform(&mut self) -> f64 {
+        ((self.next_u64() >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+    }
+    fn gauss(&mut self) -> f64 {
+        let (u1, u2) = (self.uniform(), self.uniform());
+        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+    }
+}
+
+struct Synth {
+    signal: Vec<f64>,
+    /// True R positions in samples (not integers).
+    r_true: Vec<f64>,
+}
+
+/// Sum-of-Gaussians ECG (P, Q, R, S, T) with respiratory and slow RR modulation, baseline wander
+/// and white noise. `sign = -1` inverts the lead. R positions are exact by construction (the
+/// neighbouring waves move the maximum by < 0.01 sample).
+fn synth_ecg(fs: f64, seconds: f64, seed: u64, noise: f64, sign: f64) -> Synth {
+    let n = (seconds * fs) as usize;
+    let mut rng = Rng(seed);
+    let mut x = vec![0.0; n];
+    // (amplitude, offset s, sigma s)
+    let waves = [
+        (0.12, -0.20, 0.025),
+        (-0.10, -0.035, 0.008),
+        (1.00, 0.0, 0.009),
+        (-0.25, 0.035, 0.008),
+        (0.30, 0.28, 0.045),
+    ];
+    let mut r_true = Vec::new();
+    let mut t = 0.4 + rng.uniform() * 0.3;
+    while t < seconds - 0.6 {
+        r_true.push(t * fs);
+        let amp = 1.0 + 0.05 * rng.gauss();
+        let lo = ((t - 0.5) * fs).max(0.0) as usize;
+        let hi = (((t + 0.6) * fs) as usize).min(n);
+        for (i, xi) in x.iter_mut().enumerate().take(hi).skip(lo) {
+            let ti = i as f64 / fs - t;
+            for &(a, off, s) in &waves {
+                let z = (ti - off) / s;
+                *xi += sign * amp * a * (-0.5 * z * z).exp();
+            }
+        }
+        let rr = 0.85
+            + 0.04 * (2.0 * std::f64::consts::PI * 0.25 * t).sin()
+            + 0.03 * (2.0 * std::f64::consts::PI * 0.07 * t).sin()
+            + 0.015 * rng.gauss();
+        t += rr;
+    }
+    for (i, xi) in x.iter_mut().enumerate() {
+        let ti = i as f64 / fs;
+        *xi += 0.15 * (2.0 * std::f64::consts::PI * 0.3 * ti).sin() + noise * rng.gauss();
+    }
+    Synth { signal: x, r_true }
+}
+
+/// Distance (samples) from each true R to the nearest detection.
+fn errors_to_truth(truth: &[f64], det: &[f64]) -> Vec<f64> {
+    truth
+        .iter()
+        .map(|&r| {
+            det.iter()
+                .map(|&d| (d - r).abs())
+                .fold(f64::INFINITY, f64::min)
+        })
+        .collect()
+}
+
+fn median(v: &[f64]) -> f64 {
+    let mut s = v.to_vec();
+    s.sort_by(f64::total_cmp);
+    if s.is_empty() {
+        f64::NAN
+    } else {
+        s[s.len() / 2]
+    }
+}
+
+fn rmssd(rr: &[f64]) -> f64 {
+    let d: Vec<f64> = rr.windows(2).map(|w| w[1] - w[0]).collect();
+    (d.iter().map(|v| v * v).sum::<f64>() / d.len() as f64).sqrt()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Refinement accuracy
+// ---------------------------------------------------------------------------------------------
+
+use fast_hrv::detect::{Polarity, RefineConfig, refine_peaks};
+use fast_hrv::{EcgFilterConfig, ecg_clean_zero_phase, rri_from_positions, rri_from_times};
+
+const FS: f64 = 512.0;
+
+fn clean(x: &[f64]) -> Vec<f64> {
+    ecg_clean_zero_phase(x, FS, &EcgFilterConfig::default()).unwrap()
+}
+
+#[test]
+fn refinement_fixes_the_elgendi_offset() {
+    for (seed, noise, sign) in [
+        (1u64, 0.0, 1.0),
+        (2, 0.02, 1.0),
+        (3, 0.02, -1.0),
+        (4, 0.05, 1.0),
+    ] {
+        let s = synth_ecg(FS, 60.0, seed, noise, sign);
+        let c = clean(&s.signal);
+        let raw = elgendi_peaks(&s.signal, FS, &ElgendiConfig::default()).unwrap();
+        let raw_f: Vec<f64> = raw.iter().map(|&p| p as f64).collect();
+        let refined = refine_peaks(&c, FS, &raw, &RefineConfig::default()).unwrap();
+        // the first beat can fall inside the moving averages' warm-up
+        let truth = &s.r_true[1..];
+        let e_raw = errors_to_truth(truth, &raw_f);
+        let e_ref = errors_to_truth(truth, &refined.positions);
+        let worst = e_ref.iter().cloned().fold(0.0, f64::max);
+        eprintln!(
+            "seed {seed} noise {noise} sign {sign:+}: beats {} detected {}  raw offset median {:.1} samples \
+             ({:.1} ms)  refined median {:.3} max {worst:.3} samples  sign {}",
+            truth.len(),
+            raw.len(),
+            median(&e_raw),
+            median(&e_raw) / FS * 1000.0,
+            median(&e_ref),
+            refined.sign
+        );
+        assert_eq!(refined.sign, sign, "auto polarity");
+        assert!(
+            median(&e_raw) > 10.0,
+            "raw Elgendi detections should be late"
+        );
+        assert!(
+            worst <= 1.0,
+            "refined peaks must be within 1 sample of the true R"
+        );
+    }
+}
+
+#[test]
+fn refinement_fixes_constant_offsets_and_polarity_modes() {
+    let s = synth_ecg(FS, 60.0, 11, 0.01, 1.0);
+    let c = clean(&s.signal);
+    let inv: Vec<f64> = c.iter().map(|v| -v).collect();
+    for shift in [-20i64, -12, -5, 0, 7, 15, 25] {
+        let cands: Vec<usize> = s
+            .r_true
+            .iter()
+            .map(|&r| (r.round() as i64 + shift) as usize)
+            .collect();
+        for (label, sig, pol) in [
+            ("positive", &c, Polarity::Positive),
+            ("auto", &c, Polarity::Auto),
+            ("absolute", &c, Polarity::Absolute),
+            ("inverted+negative", &inv, Polarity::Negative),
+            ("inverted+auto", &inv, Polarity::Auto),
+            ("inverted+absolute", &inv, Polarity::Absolute),
+        ] {
+            let cfg = RefineConfig {
+                polarity: pol,
+                ..RefineConfig::default()
+            };
+            let r = refine_peaks(sig, FS, &cands, &cfg).unwrap();
+            assert_eq!(r.positions.len(), s.r_true.len(), "{label} {shift}");
+            let e = errors_to_truth(&s.r_true, &r.positions);
+            let worst = e.iter().cloned().fold(0.0, f64::max);
+            assert!(worst <= 1.0, "{label} shift {shift}: worst {worst}");
+            // interpolation helps: sub-sample error, well below the 0.5-sample rounding error
+            assert!(
+                median(&e) < 0.2,
+                "{label} shift {shift}: median {}",
+                median(&e)
+            );
+        }
+    }
+}
+
+#[test]
+fn sub_sample_peaks_reduce_rmssd_bias() {
+    // RR from sub-sample positions vs integer indices vs the true positions
+    let s = synth_ecg(FS, 300.0, 21, 0.01, 1.0);
+    let c = clean(&s.signal);
+    let cands: Vec<usize> = s.r_true.iter().map(|&r| r.round() as usize + 9).collect();
+    let r = refine_peaks(&c, FS, &cands, &RefineConfig::default()).unwrap();
+    let int_cfg = RefineConfig {
+        interpolate: false,
+        ..RefineConfig::default()
+    };
+    let ri = refine_peaks(&c, FS, &cands, &int_cfg).unwrap();
+    let true_rr = rri_from_positions(&s.r_true, FS);
+    let sub_rr = rri_from_positions(&r.positions, FS);
+    let int_rr = fast_hrv::rri_from_peaks(&ri.indices, FS as u32);
+    let (t, a, b) = (rmssd(&true_rr), rmssd(&sub_rr), rmssd(&int_rr));
+    eprintln!("RMSSD true {t:.3} ms, sub-sample {a:.3} ms, integer {b:.3} ms");
+    assert!((a - t).abs() < 0.1, "sub-sample RMSSD {a} vs true {t}");
+    assert!((a - t).abs() < (b - t).abs());
+    // seconds and samples give the same RR
+    let by_time = rri_from_times(&r.times_s(FS));
+    for (x, y) in by_time.iter().zip(&sub_rr) {
+        assert!((x - y).abs() < 1e-9);
+    }
+}
