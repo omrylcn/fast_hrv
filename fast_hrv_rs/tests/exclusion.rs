@@ -8,7 +8,9 @@
 //!    and fiducial jitter: classification, NN mask and RMSSD accuracy.
 
 use fast_hrv::exclusion::{BeatClass, BeatExclusion, ExclusionParams, classify_beats};
-use fast_hrv::peaks::KubiosParams;
+use fast_hrv::hrv::compute_rmssd;
+use fast_hrv::peaks::{KubiosParams, fix_positions_with};
+use fast_hrv::rri_from_positions;
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------------------------
@@ -334,4 +336,215 @@ fn injected_ectopic_beats_are_classified_ectopic() {
         "injected ectopic beats classified Ectopic: {n_hit}/{n_ect}; artifacts acted on: {n_art_hit}/{n_art}"
     );
     assert_eq!(n_hit, n_ect);
+}
+
+fn rel_err(x: f64, truth: f64) -> f64 {
+    ((x - truth) / truth).abs()
+}
+
+fn quantile(v: &[f64], q: f64) -> f64 {
+    let mut s = v.to_vec();
+    s.sort_by(f64::total_cmp);
+    s[((s.len() - 1) as f64 * q).round() as usize]
+}
+
+/// HRV levels of the synthetic series: (mean RR, RSA, noise) in ms; RMSSD ≈ 10 / 20 / 40 ms.
+const LEVELS: [(f64, f64, f64); 3] = [(650.0, 9.0, 4.0), (750.0, 18.0, 8.0), (850.0, 38.0, 15.0)];
+
+/// At ≤ 3 % ectopy (+ 1 % missed / extra / jitter) on 300 beats, RMSSD from the masked NN stays
+/// within 10 % of the true sinus RMSSD in every series. Kubios interpolation moves the premature
+/// beat (and often a neighbour) to a midpoint, leaving 50–100 ms steps: its RMSSD error is many
+/// times larger (this is why the exclusion mode exists).
+#[test]
+fn masked_rmssd_close_to_truth_interpolation_is_not() {
+    let params = ExclusionParams::default();
+    let (mut masked, mut interp, mut interp_low) = (vec![], vec![], vec![]);
+    let mut worse = 0;
+    for (li, &(mean, rsa, noise)) in LEVELS.iter().enumerate() {
+        for seed in 0..20u64 {
+            let truth = sinus(seed + 100 * li as u64, 300, mean, rsa, 12.0, noise);
+            let rt = compute_rmssd(&rri_from_positions(&truth, FS));
+            let (x, _, _) = inject(&truth, 9, 3, seed + 1000);
+            let out = classify_beats(&x, FS, &params, None).unwrap();
+            let em = rel_err(out.rmssd().unwrap(), rt);
+            let k = fix_positions_with(&x, FS, &KubiosParams::default()).unwrap();
+            let ei = rel_err(compute_rmssd(&k.rri_ms(FS)), rt);
+            assert!(
+                em <= 0.10,
+                "level {li} seed {seed}: masked RMSSD error {:.1} %",
+                100.0 * em
+            );
+            worse += (ei > em) as usize;
+            masked.push(em);
+            interp.push(ei);
+            if li == 0 {
+                interp_low.push(ei);
+            }
+        }
+    }
+    let n = masked.len();
+    eprintln!(
+        "RMSSD |relative error| over {n} series (3 % ectopy + 1 % artifacts, 300 beats): masked median {:.1} % p90 {:.1} % max {:.1} %; Kubios interpolation median {:.1} % p90 {:.1} % (RMSSD ~10 ms: median {:.0} %)",
+        100.0 * quantile(&masked, 0.5),
+        100.0 * quantile(&masked, 0.9),
+        100.0 * quantile(&masked, 1.0),
+        100.0 * quantile(&interp, 0.5),
+        100.0 * quantile(&interp, 0.9),
+        100.0 * quantile(&interp_low, 0.5),
+    );
+    assert!(quantile(&interp, 0.5) >= 0.20);
+    assert!(
+        quantile(&interp_low, 0.5) >= 1.0,
+        "low HRV: RMSSD at least doubled"
+    );
+    assert!(quantile(&interp, 0.5) >= 10.0 * quantile(&masked, 0.5));
+    assert_eq!(worse, n, "interpolation is worse in every series");
+}
+
+/// At 8 % ectopy the ectopic dRR inflate the quartile thresholds and single-stage detection goes
+/// blind to the remaining artifacts; the second pass on the copy with the ectopic beats at their
+/// neighbours' midpoint finds them again.
+///
+/// - With the pattern rule (default) both stages find the ectopic beats; single-stage misses most
+///   extra beats and jitter, and its RMSSD error explodes.
+/// - With Kubios flags only (`premature_factor = 0`), single-stage also misses many ectopic beats;
+///   two-stage excludes most of them (as stage-2 suspects).
+#[test]
+fn two_stage_catches_what_single_stage_misses_at_high_ectopy() {
+    let mut caught_art = [0usize; 2];
+    let mut n_art = 0;
+    let mut err: [Vec<f64>; 2] = [vec![], vec![]];
+    let mut ect_excl = [[0usize; 2]; 2]; // [pattern on/off][single/two]
+    let mut n_ect = [0usize; 2];
+    for seed in 0..30u64 {
+        for (li, &(mean, rsa, noise)) in LEVELS[..2].iter().enumerate() {
+            let truth = sinus(seed + 100 * li as u64, 300, mean, rsa, 12.0, noise);
+            let rt = compute_rmssd(&rri_from_positions(&truth, FS));
+            let (x, events, epos) = inject(&truth, 24, 6, seed + 2000); // 8 % + 2 %
+            for (pi, premature_factor) in [0.85, 0.0].into_iter().enumerate() {
+                let two = ExclusionParams {
+                    premature_factor,
+                    ..Default::default()
+                };
+                let one = ExclusionParams {
+                    two_stage: false,
+                    ..two
+                };
+                let outs = [
+                    classify_beats(&x, FS, &one, None).unwrap(),
+                    classify_beats(&x, FS, &two, None).unwrap(),
+                ];
+                for (s, o) in outs.iter().enumerate() {
+                    for i in ectopic_inputs(&x, &epos) {
+                        let j = o.input_to_output[i].unwrap();
+                        ect_excl[pi][s] += (!o.nn_valid[j - 1] && !o.nn_valid[j]) as usize;
+                    }
+                    if pi == 0 {
+                        err[s].push(rel_err(o.rmssd().unwrap(), rt));
+                        for &(_, lo, hi) in events.iter().filter(|e| e.0 != Event::Ectopic) {
+                            caught_art[s] += caught(o, &x, lo, hi) as usize;
+                        }
+                    }
+                }
+                n_ect[pi] += epos.len();
+            }
+            n_art += events.iter().filter(|e| e.0 != Event::Ectopic).count();
+        }
+    }
+    let share = |a: usize, b: usize| a as f64 / b as f64;
+    eprintln!(
+        "8 % ectopy + 2 % artifacts, 60 series of 300 beats:\n  artifacts acted on: single {}/{n_art}, two-stage {}/{n_art}\n  RMSSD error median / p90: single {:.1} / {:.1} %, two-stage {:.1} / {:.1} %\n  ectopic beats with both NN excluded, pattern rule on: single {}/{}, two-stage {}/{}\n  ectopic beats with both NN excluded, Kubios flags only: single {}/{}, two-stage {}/{}",
+        caught_art[0],
+        caught_art[1],
+        100.0 * quantile(&err[0], 0.5),
+        100.0 * quantile(&err[0], 0.9),
+        100.0 * quantile(&err[1], 0.5),
+        100.0 * quantile(&err[1], 0.9),
+        ect_excl[0][0],
+        n_ect[0],
+        ect_excl[0][1],
+        n_ect[0],
+        ect_excl[1][0],
+        n_ect[1],
+        ect_excl[1][1],
+        n_ect[1],
+    );
+    // pattern rule: every ectopic beat excluded by both
+    assert!(share(ect_excl[0][0], n_ect[0]) >= 0.99);
+    assert!(share(ect_excl[0][1], n_ect[0]) >= 0.99);
+    // artifacts hidden by the inflated thresholds
+    assert!(share(caught_art[1], n_art) >= 0.85);
+    assert!(share(caught_art[0], n_art) <= 0.70);
+    // RMSSD
+    assert!(quantile(&err[1], 0.5) <= 0.05);
+    assert!(quantile(&err[1], 0.9) <= 0.15);
+    assert!(quantile(&err[0], 0.5) >= 0.20);
+    // Kubios flags only: single-stage misses ectopic beats that two-stage excludes
+    let (s1, s2) = (
+        share(ect_excl[1][0], n_ect[1]),
+        share(ect_excl[1][1], n_ect[1]),
+    );
+    assert!(s1 <= 0.75 && s2 >= 0.75 && s2 - s1 >= 0.15, "{s1} {s2}");
+}
+
+/// All-valid NN: the masked RMSSD is the ordinary RMSSD (bit for bit); too few valid pairs: `None` /
+/// `NaN`.
+#[test]
+fn masked_rmssd_all_valid_and_too_few_pairs() {
+    let truth = sinus(3, 300, 750.0, 18.0, 12.0, 8.0);
+    let out = classify_beats(&truth, FS, &ExclusionParams::default(), None).unwrap();
+    assert!(out.nn_valid.iter().all(|&v| v));
+    let rr = rri_from_positions(&truth, FS);
+    assert_eq!(out.rmssd().unwrap().to_bits(), compute_rmssd(&rr).to_bits());
+    let td = out.time_domain();
+    assert_eq!(td.time, fast_hrv::time_domain(&rr));
+    assert_eq!((td.n_nn, td.n_pairs), (299, 298));
+
+    // every second beat ectopic-like (bigeminy): no two adjacent NN survive
+    let mut big = truth.clone();
+    for k in (2..big.len() - 2).step_by(2) {
+        big[k] -= 0.3 * (truth[k] - truth[k - 1]);
+    }
+    let out = classify_beats(&big, FS, &ExclusionParams::default(), None).unwrap();
+    let td = out.time_domain();
+    eprintln!(
+        "bigeminy: kept {} of {} NN, {} pairs",
+        out.kept_count(),
+        out.usable_count(),
+        td.n_pairs
+    );
+    assert!(td.n_pairs < 2);
+    assert_eq!(out.rmssd(), None);
+    assert!(td.time.rmssd.is_nan());
+}
+
+/// Segments: `concat_nn` puts a NaN / invalid entry between segments, so no successive difference
+/// spans the gap.
+#[test]
+fn segments_do_not_mix() {
+    let a = sinus(1, 200, 750.0, 18.0, 12.0, 8.0);
+    let b: Vec<f64> = sinus(2, 200, 600.0, 9.0, 12.0, 4.0)
+        .iter()
+        .map(|p| p + a.last().unwrap() + 60.0 * FS)
+        .collect();
+    let outs = fast_hrv::classify_segments(
+        &[a.clone(), b.clone()],
+        FS,
+        &ExclusionParams::default(),
+        None,
+    )
+    .unwrap();
+    let (nn, valid) = fast_hrv::concat_nn(&outs);
+    assert_eq!(nn.len(), 199 + 1 + 199);
+    assert!(nn[199].is_nan() && !valid[199]);
+    let m = fast_hrv::time_domain_masked(&nn, &valid);
+    // expected: the differences of each segment on its own
+    let d: Vec<f64> = outs
+        .iter()
+        .flat_map(|o| fast_hrv::masked_differences(&o.nn_ms(), &o.nn_valid))
+        .collect();
+    let want = (d.iter().map(|x| x.powi(2)).sum::<f64>() / d.len() as f64).sqrt();
+    assert_eq!(m.n_pairs, d.len());
+    assert!(d.len() >= 390);
+    assert_eq!(m.time.rmssd.to_bits(), want.to_bits());
 }

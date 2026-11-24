@@ -85,4 +85,6 @@ pub use stream::{
     StreamConfig, StreamDetector, StreamPeak, StreamPeaks, StreamWindow, fix_stream_peaks,
     peak_positions,
 };
-pub use time_domain::{TimeDomain, time_domain};
+pub use time_domain::{
+    MaskedTimeDomain, TimeDomain, masked_differences, rmssd_masked, time_domain, time_domain_masked,
+};

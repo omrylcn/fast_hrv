@@ -6,7 +6,7 @@
 //! often a neighbour) to the midpoint of its neighbours, which leaves 50–100 ms steps in the NN
 //! series; on low-HRV recordings that multiplies RMSSD. Dropping the two NN intervals adjacent to the
 //! premature beat and computing RMSSD only from successive differences of two adjacent kept NN
-//! intervals (`time_domain::time_domain_masked`) keeps RMSSD close to the sinus value. The
+//! intervals ([`crate::time_domain::time_domain_masked`]) keeps RMSSD close to the sinus value. The
 //! correction APIs ([`crate::peaks::fix_peaks_with`], [`crate::peaks::fix_positions_with`]) are
 //! unchanged; this is an alternative.
 //!
@@ -57,6 +57,7 @@
 use crate::error::HrvError;
 use crate::peaks::{KubiosParams, detect_artifacts_positions, detect_detail, fix_core};
 use crate::report::rri_from_positions;
+use crate::time_domain::{MaskedTimeDomain, rmssd_masked, time_domain_masked};
 
 /// Parameters of the exclusion mode ([`classify_beats`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -301,6 +302,18 @@ impl BeatExclusion {
         rri_from_positions(&self.positions, self.sampling_rate)
     }
 
+    /// Time-domain metrics on the valid NN only: RMSSD / SDSD / pNNx from adjacent valid pairs
+    /// ([`crate::time_domain::time_domain_masked`]).
+    pub fn time_domain(&self) -> MaskedTimeDomain {
+        time_domain_masked(&self.nn_ms(), &self.nn_valid)
+    }
+
+    /// RMSSD (ms) from adjacent valid NN pairs; `None` with fewer than
+    /// [`crate::time_domain::MIN_MASKED_PAIRS`] pairs.
+    pub fn rmssd(&self) -> Option<f64> {
+        rmssd_masked(&self.nn_ms(), &self.nn_valid)
+    }
+
     /// Valid NN intervals.
     pub fn kept_count(&self) -> usize {
         self.nn_valid.iter().filter(|&&v| v).count()
@@ -475,7 +488,7 @@ pub fn classify_segments(
 
 /// NN intervals (ms) and validity of several segments concatenated, with one `NaN` / invalid entry
 /// between consecutive segments, so that no successive difference spans a gap. Feed the result to
-/// `time_domain::time_domain_masked`.
+/// [`crate::time_domain::time_domain_masked`].
 pub fn concat_nn(outputs: &[BeatExclusion]) -> (Vec<f64>, Vec<bool>) {
     let mut nn = Vec::new();
     let mut valid = Vec::new();

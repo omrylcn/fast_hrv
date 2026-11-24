@@ -209,6 +209,94 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
     }
 }
 
+// =============================================================================
+// MASKED (EXCLUSION) TIME DOMAIN
+// =============================================================================
+
+/// Fewest successive differences for the pair-based masked metrics (RMSSD, SDSD, pNNx); fewer give
+/// `NaN`. Two, as [`time_domain`] (≥ 3 intervals = ≥ 2 differences) and as SDSD needs.
+pub const MIN_MASKED_PAIRS: usize = 2;
+
+/// Result of [`time_domain_masked`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MaskedTimeDomain {
+    /// Metrics: distribution metrics on the valid NN, pair metrics on the valid adjacent pairs.
+    pub time: TimeDomain,
+    /// Valid NN intervals used.
+    pub n_nn: usize,
+    /// Successive differences used (pairs of adjacent valid NN).
+    pub n_pairs: usize,
+}
+
+/// `true` where NN interval `k` is used: `valid[k]` and finite.
+fn used(nn_ms: &[f64], valid: &[bool], k: usize) -> bool {
+    valid.get(k).copied().unwrap_or(false) && nn_ms[k].is_finite()
+}
+
+/// Successive differences `nn[k+1] − nn[k]` (ms) over the pairs of **adjacent** NN intervals that
+/// are both valid (and finite). No difference spans an excluded interval, a `NaN` entry or a gap
+/// marker.
+pub fn masked_differences(nn_ms: &[f64], valid: &[bool]) -> Vec<f64> {
+    (0..nn_ms.len().saturating_sub(1))
+        .filter(|&k| used(nn_ms, valid, k) && used(nn_ms, valid, k + 1))
+        .map(|k| nn_ms[k + 1] - nn_ms[k])
+        .collect()
+}
+
+/// RMSSD (ms) from the valid adjacent pairs only ([`masked_differences`]); `None` with fewer than
+/// [`MIN_MASKED_PAIRS`] pairs.
+pub fn rmssd_masked(nn_ms: &[f64], valid: &[bool]) -> Option<f64> {
+    let d = masked_differences(nn_ms, valid);
+    (d.len() >= MIN_MASKED_PAIRS).then(|| rmssd_of_differences(&d))
+}
+
+fn rmssd_of_differences(d: &[f64]) -> f64 {
+    // same operations and order as `compute_rmssd`
+    let sum_sq: f64 = d.iter().map(|x| x.powi(2)).sum();
+    (sum_sq / d.len() as f64).sqrt()
+}
+
+/// Time-domain metrics with an NN validity mask (exclusion mode, [`crate::exclusion`]).
+///
+/// `nn_ms[k]` is used if `valid[k]` is `true` and the value is finite (a missing `valid` entry counts
+/// as invalid; a `NaN` entry can mark a gap between segments, see [`crate::exclusion::concat_nn`]).
+///
+/// - **Pair metrics** RMSSD, SDSD, pNN50, pNN20 (and CVSD = RMSSD / MeanNN) use only the successive
+///   differences of **adjacent** intervals that are both used: an excluded interval or a gap breaks
+///   the series and no difference spans it. Fewer than [`MIN_MASKED_PAIRS`] differences → `NaN`.
+/// - **Distribution metrics** (MeanNN, SDNN, median, MAD, IQR, min, max, CVNN, heart rate, HTI,
+///   TINN) are [`time_domain`] of the used intervals (≥ 3, else `NaN`).
+///
+/// With every interval valid and finite the result equals [`time_domain`] bit for bit.
+pub fn time_domain_masked(nn_ms: &[f64], valid: &[bool]) -> MaskedTimeDomain {
+    let kept: Vec<f64> = (0..nn_ms.len())
+        .filter(|&k| used(nn_ms, valid, k))
+        .map(|k| nn_ms[k])
+        .collect();
+    let d = masked_differences(nn_ms, valid);
+    let mut time = time_domain(&kept);
+    if d.len() >= MIN_MASKED_PAIRS {
+        let n = d.len() as f64;
+        time.rmssd = rmssd_of_differences(&d);
+        time.sdsd = std_ddof(&d, 1);
+        time.pnn50 = (d.iter().filter(|x| x.abs() > 50.0).count() as f64 / n) * 100.0;
+        time.pnn20 = (d.iter().filter(|x| x.abs() > 20.0).count() as f64 / n) * 100.0;
+        time.cvsd = time.rmssd / time.mean_nn;
+    } else {
+        time.rmssd = f64::NAN;
+        time.sdsd = f64::NAN;
+        time.pnn50 = f64::NAN;
+        time.pnn20 = f64::NAN;
+        time.cvsd = f64::NAN;
+    }
+    MaskedTimeDomain {
+        time,
+        n_nn: kept.len(),
+        n_pairs: d.len(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,6 +403,81 @@ mod tests {
         v[3] = f64::NAN;
         let t = time_domain(&v);
         assert!(t.sdnn.is_nan() && t.tinn.is_nan() && t.hti.is_nan());
+    }
+
+    fn same(a: f64, b: f64) -> bool {
+        a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan())
+    }
+
+    #[test]
+    fn masked_all_valid_equals_time_domain() {
+        let v: Vec<f64> = (0..300)
+            .map(|i| 800.0 + (i as f64 * 0.37).sin() * 40.0 + (i % 7) as f64 * 3.0)
+            .collect();
+        for rri in [&RRI[..], &v[..]] {
+            let t = time_domain(rri);
+            let m = time_domain_masked(rri, &vec![true; rri.len()]);
+            assert_eq!((m.n_nn, m.n_pairs), (rri.len(), rri.len() - 1));
+            let (a, b) = (m.time, t);
+            for (x, y) in [
+                (a.mean_nn, b.mean_nn),
+                (a.sdnn, b.sdnn),
+                (a.rmssd, b.rmssd),
+                (a.sdsd, b.sdsd),
+                (a.pnn50, b.pnn50),
+                (a.pnn20, b.pnn20),
+                (a.median_nn, b.median_nn),
+                (a.mad_nn, b.mad_nn),
+                (a.iqr_nn, b.iqr_nn),
+                (a.cvnn, b.cvnn),
+                (a.cvsd, b.cvsd),
+                (a.mean_hr, b.mean_hr),
+                (a.sd_hr, b.sd_hr),
+                (a.hti, b.hti),
+                (a.tinn, b.tinn),
+            ] {
+                assert!(same(x, y), "{x} vs {y}");
+            }
+            assert_eq!(rmssd_masked(rri, &vec![true; rri.len()]), Some(b.rmssd));
+        }
+    }
+
+    #[test]
+    fn masked_pairs_do_not_span_excluded_intervals() {
+        let nn = [800.0, 900.0, 600.0, 1000.0, 810.0, 820.0, 790.0];
+        let valid = [true, true, false, false, true, true, true];
+        assert_eq!(masked_differences(&nn, &valid), vec![100.0, 10.0, -30.0]);
+        let m = time_domain_masked(&nn, &valid);
+        assert_eq!((m.n_nn, m.n_pairs), (5, 3));
+        let want = ((100.0f64.powi(2) + 10.0f64.powi(2) + 30.0f64.powi(2)) / 3.0).sqrt();
+        assert_relative_eq!(m.time.rmssd, want, epsilon = 1e-12);
+        assert_relative_eq!(m.time.pnn50, 100.0 / 3.0, epsilon = 1e-12);
+        assert_relative_eq!(
+            m.time.mean_nn,
+            (800.0 + 900.0 + 810.0 + 820.0 + 790.0) / 5.0
+        );
+        // a NaN entry (gap marker) breaks the series like an invalid one
+        let nn2 = [800.0, 900.0, f64::NAN, 1000.0, 810.0, 820.0, 790.0];
+        let m2 = time_domain_masked(&nn2, &[true; 7]);
+        assert_eq!(m2.n_pairs, 4);
+        // shorter mask: missing entries are invalid
+        assert_eq!(masked_differences(&nn, &[true, true]), vec![100.0]);
+    }
+
+    #[test]
+    fn masked_too_few_pairs_is_nan() {
+        let nn = [800.0, 810.0, 790.0, 805.0, 800.0];
+        // valid NN 0, 2, 4: three intervals but no adjacent pair
+        let valid = [true, false, true, false, true];
+        let m = time_domain_masked(&nn, &valid);
+        assert_eq!((m.n_nn, m.n_pairs), (3, 0));
+        assert!(m.time.rmssd.is_nan() && m.time.sdsd.is_nan() && m.time.pnn50.is_nan());
+        assert!(m.time.cvsd.is_nan());
+        assert!(m.time.mean_nn.is_finite() && m.time.sdnn.is_finite());
+        assert_eq!(rmssd_masked(&nn, &valid), None);
+        // one pair only
+        assert_eq!(rmssd_masked(&nn, &[true, true, false, false, false]), None);
+        assert!(time_domain_masked(&[], &[]).time.rmssd.is_nan());
     }
 
     #[test]
