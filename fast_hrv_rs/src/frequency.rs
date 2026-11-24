@@ -4,7 +4,10 @@
 //! 1. RR aralıklarından zaman ekseni (atımların zamanı) çıkarılır.
 //! 2. RR serisi 4 Hz'e doğal kübik spline ile eşit aralıklı örneklenir.
 //! 3. Ortalama çıkarılır; Welch: Hann penceresi, %50 örtüşme, segment 256 örnek (64 sn; kısa kayıtta tamamı).
-//! 4. Güç yoğunluğu (ms²/Hz) bantlar üzerinde yamuk kuralıyla toplanır.
+//! 4. Güç yoğunluğu (ms²/Hz) bantlar üzerinde yamuk kuralıyla, bant kenarlarında kırpılarak toplanır
+//!    (kenardaki yamuk iki banda birden yazılmaz).
+//! 5. Bant başına en az süre: HF ≥ 60 sn, LF ≥ 120 sn, VLF ≥ 300 sn; altında NaN ([`FrequencyOptions`]).
+//!    Sabit (değişkenliği sayısal gürültü düzeyinde) RR serisinde güçler 0, LF/HF ve oranlar NaN.
 //!
 //! Bantlar: VLF 0.0033–0.04, LF 0.04–0.15, HF 0.15–0.4 Hz. Normalize: LFnu = LF / (LF + HF) × 100.
 //! Dış bağımlılık yok (FFT kendi içinde, radix-2).
@@ -176,14 +179,20 @@ pub fn welch(signal: &[f64], fs: f64, nperseg: usize) -> (Vec<f64>, Vec<f64>) {
     (freqs, psd)
 }
 
+/// Exact integral of the piecewise-linear PSD over `[lo, hi]` (trapezoids clipped at the band edges,
+/// PSD linearly interpolated there). Adjacent bands share their edge, so no trapezoid is counted twice
+/// and VLF + LF + HF equals the integral over 0.0033–0.4 Hz.
 fn band_power(freqs: &[f64], psd: &[f64], (lo, hi): (f64, f64)) -> f64 {
     let mut p = 0.0;
     for k in 1..freqs.len() {
         let (f0, f1) = (freqs[k - 1], freqs[k]);
-        if f1 <= lo || f0 >= hi {
+        let a = f0.max(lo);
+        let b = f1.min(hi);
+        if b <= a {
             continue;
         }
-        p += 0.5 * (psd[k - 1] + psd[k]) * (f1 - f0);
+        let at = |f: f64| psd[k - 1] + (psd[k] - psd[k - 1]) * (f - f0) / (f1 - f0);
+        p += 0.5 * (at(a) + at(b)) * (b - a);
     }
     p
 }
@@ -198,11 +207,48 @@ fn band_peak(freqs: &[f64], psd: &[f64], (lo, hi): (f64, f64)) -> f64 {
         .unwrap_or(f64::NAN)
 }
 
-/// RR aralıklarından (ms) frekans alanı metrikleri. En az ~30 sn veri ve 10 aralık gerekir; azsa NaN.
+/// Minimum record durations per band (seconds of RR data, i.e. the sum of the intervals).
+/// Below the minimum the band's power, its ratios and its peak frequency are NaN.
+/// Defaults follow the Task Force (1996) recommendation: about 10 cycles of the band's lowest
+/// frequency (HF ≥ 1 min, LF ≥ 2 min, VLF ≥ 5 min).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrequencyOptions {
+    pub min_duration_hf_s: f64,
+    pub min_duration_lf_s: f64,
+    pub min_duration_vlf_s: f64,
+}
+
+impl Default for FrequencyOptions {
+    fn default() -> Self {
+        Self {
+            min_duration_hf_s: 60.0,
+            min_duration_lf_s: 120.0,
+            min_duration_vlf_s: 300.0,
+        }
+    }
+}
+
+/// Relative numerical floor: band powers below `POWER_FLOOR_REL × mean(RR)²` are rounding noise
+/// (e.g. a constant RR series) and are reported as 0, with undefined ratios (NaN).
+pub const POWER_FLOOR_REL: f64 = 1e-12;
+
+/// RR aralıklarından (ms) frekans alanı metrikleri, varsayılan en az süre kurallarıyla
+/// (HF ≥ 60 s, LF ≥ 120 s, VLF ≥ 300 s; bkz. [`FrequencyOptions`]). En az 10 aralık gerekir.
 pub fn frequency_domain(rri: &[f64]) -> FrequencyDomain {
+    frequency_domain_with(rri, &FrequencyOptions::default())
+}
+
+/// [`frequency_domain`] with explicit per-band minimum durations.
+///
+/// - Bands whose minimum duration is not reached are NaN (power, peak, and every ratio using them;
+///   `total_power` needs all three bands).
+/// - A (near-)constant RR series gives 0 power and NaN for LF/HF, LFnu, HFnu and the peaks.
+/// - NaN, infinite or non-positive intervals give all NaN.
+pub fn frequency_domain_with(rri: &[f64], opts: &FrequencyOptions) -> FrequencyDomain {
     if rri.len() < 10 || rri.iter().any(|r| !(r.is_finite() && *r > 0.0)) {
         return FrequencyDomain::nan();
     }
+    let record_s = rri.iter().sum::<f64>() / 1000.0;
     // Atım zamanları (sn): ilk aralığın sonu t0
     let mut t = Vec::with_capacity(rri.len());
     let mut acc = 0.0;
@@ -211,7 +257,11 @@ pub fn frequency_domain(rri: &[f64]) -> FrequencyDomain {
         t.push(acc);
     }
     let duration = t[t.len() - 1] - t[0];
-    if duration < 30.0 {
+    let min_any = opts
+        .min_duration_hf_s
+        .min(opts.min_duration_lf_s)
+        .min(opts.min_duration_vlf_s);
+    if record_s < min_any || duration * RESAMPLE_HZ < 2.0 {
         return FrequencyDomain::nan();
     }
     let n = (duration * RESAMPLE_HZ).floor() as usize + 1;
@@ -219,28 +269,49 @@ pub fn frequency_domain(rri: &[f64]) -> FrequencyDomain {
     let resampled = cubic_spline(&t, rri, &grid);
     let (freqs, psd) = welch(&resampled, RESAMPLE_HZ, 256);
 
-    let vlf = band_power(&freqs, &psd, VLF);
-    let lf = band_power(&freqs, &psd, LF);
-    let hf = band_power(&freqs, &psd, HF);
+    let mean_rr = rri.iter().sum::<f64>() / rri.len() as f64;
+    let floor = POWER_FLOOR_REL * mean_rr * mean_rr;
+    let band = |b: (f64, f64), min_s: f64| -> f64 {
+        if record_s < min_s {
+            return f64::NAN;
+        }
+        let p = band_power(&freqs, &psd, b);
+        if p <= floor { 0.0 } else { p }
+    };
+    let vlf = band(VLF, opts.min_duration_vlf_s);
+    let lf = band(LF, opts.min_duration_lf_s);
+    let hf = band(HF, opts.min_duration_hf_s);
+    let positive = |p: f64| p.is_finite() && p > 0.0;
     let lfhf_sum = lf + hf;
+    let peak = |p: f64, b: (f64, f64)| {
+        if positive(p) {
+            band_peak(&freqs, &psd, b)
+        } else {
+            f64::NAN
+        }
+    };
     FrequencyDomain {
         vlf,
         lf,
         hf,
         total_power: vlf + lf + hf,
-        lf_hf: if hf > 0.0 { lf / hf } else { f64::NAN },
-        lfnu: if lfhf_sum > 0.0 {
+        lf_hf: if positive(hf) && lf.is_finite() {
+            lf / hf
+        } else {
+            f64::NAN
+        },
+        lfnu: if positive(lfhf_sum) {
             lf / lfhf_sum * 100.0
         } else {
             f64::NAN
         },
-        hfnu: if lfhf_sum > 0.0 {
+        hfnu: if positive(lfhf_sum) {
             hf / lfhf_sum * 100.0
         } else {
             f64::NAN
         },
-        lf_peak: band_peak(&freqs, &psd, LF),
-        hf_peak: band_peak(&freqs, &psd, HF),
+        lf_peak: peak(lf, LF),
+        hf_peak: peak(hf, HF),
     }
 }
 
@@ -331,7 +402,69 @@ mod tests {
     }
 
     #[test]
+    fn band_edges_are_not_counted_twice() {
+        // flat PSD of 1: band power must equal the band width exactly
+        let freqs: Vec<f64> = (0..129).map(|k| k as f64 * 4.0 / 256.0).collect();
+        let psd = vec![1.0; freqs.len()];
+        for b in [VLF, LF, HF] {
+            assert_relative_eq!(band_power(&freqs, &psd, b), b.1 - b.0, epsilon = 1e-12);
+        }
+        let total = band_power(&freqs, &psd, (VLF.0, HF.1));
+        let sum = band_power(&freqs, &psd, VLF)
+            + band_power(&freqs, &psd, LF)
+            + band_power(&freqs, &psd, HF);
+        assert_relative_eq!(total, sum, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn constant_rr_has_no_lf_hf() {
+        let fd = frequency_domain(&[800.0; 500]);
+        assert!(
+            fd.lf_hf.is_nan() && fd.lfnu.is_nan() && fd.hfnu.is_nan(),
+            "{fd:?}"
+        );
+        assert_eq!(fd.lf, 0.0);
+        assert_eq!(fd.hf, 0.0);
+        assert!(fd.lf_peak.is_nan());
+    }
+
+    #[test]
+    fn per_band_minimum_durations() {
+        let series = |secs: f64| {
+            let mut rri = Vec::new();
+            let mut t = 0.0;
+            while t < secs {
+                let r =
+                    800.0 + 30.0 * (2.0 * PI * 0.25 * t).sin() + 20.0 * (2.0 * PI * 0.1 * t).sin();
+                rri.push(r);
+                t += r / 1000.0;
+            }
+            rri
+        };
+        let f90 = frequency_domain(&series(90.0));
+        assert!(f90.hf.is_finite() && f90.lf.is_nan() && f90.vlf.is_nan() && f90.lf_hf.is_nan());
+        assert!(f90.hf_peak.is_finite() && f90.lf_peak.is_nan() && f90.total_power.is_nan());
+        let f150 = frequency_domain(&series(150.0));
+        assert!(
+            f150.hf.is_finite()
+                && f150.lf.is_finite()
+                && f150.vlf.is_nan()
+                && f150.lf_hf.is_finite()
+        );
+        let f300 = frequency_domain(&series(300.0));
+        assert!(f300.vlf.is_finite() && f300.total_power.is_finite());
+        assert!(frequency_domain(&series(50.0)).hf.is_nan());
+        // custom thresholds
+        let o = FrequencyOptions {
+            min_duration_hf_s: 30.0,
+            min_duration_lf_s: 30.0,
+            min_duration_vlf_s: 30.0,
+        };
+        assert!(frequency_domain_with(&series(50.0), &o).vlf.is_finite());
+    }
+
+    #[test]
     fn short_record_is_nan() {
-        assert!(frequency_domain(&[800.0; 20]).lf.is_nan()); // 16 sn < 30 sn
+        assert!(frequency_domain(&[800.0; 20]).lf.is_nan()); // 16 sn < 60 sn (HF en az süresi)
     }
 }

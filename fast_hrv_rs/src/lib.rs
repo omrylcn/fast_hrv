@@ -44,7 +44,9 @@ pub use ecg::{
     ecg_clean, ecg_clean_causal, ecg_clean_neurokit, ecg_clean_zero_phase, process_ecg,
 };
 pub use error::HrvError;
-pub use frequency::{FrequencyDomain, frequency_domain, welch};
+pub use frequency::{
+    FrequencyDomain, FrequencyOptions, frequency_domain, frequency_domain_with, welch,
+};
 pub use gaps::{Gap, RrSegment, fix_peaks_segmented, rri_with_gaps, split_at_gaps};
 pub use hrv::*;
 pub use peaks::{

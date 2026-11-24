@@ -56,7 +56,7 @@ pub struct HrvReport {
 }
 
 /// NN aralıklarından (ms) bütün metrikler. Kısa kayıtlarda hesaplanamayanlar NaN döner:
-/// zaman alanı ≥ 3 aralık, frekans alanı ≥ 30 sn, entropi/DFA ≥ 16 aralık.
+/// zaman alanı ≥ 3 aralık, frekans alanı bant başına HF ≥ 60 sn, LF ≥ 120 sn, VLF ≥ 300 sn (RR toplamı), entropi/DFA ≥ 16 aralık.
 ///
 /// Girdide NaN/sonsuz bir aralık varsa bütün metrikler NaN döner (panik yok).
 pub fn hrv(rri: &[f64]) -> HrvReport {
