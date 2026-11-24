@@ -2,9 +2,10 @@
 //!
 //! EKG'den kalp hızı değişkenliğine (HRV) hızlı ve bağımlılıksız Rust kütüphanesi.
 //!
-//! - **Sinyal:** EKG temizleme (Butterworth, sıfır fazlı), R tepe tespiti (NeuroKit2 yöntemi),
-//!   Kubios artefakt düzeltme, atım kalitesi (şablon eşleştirme).
-//! - **HRV, 39 metrik:** zaman alanı (17), frekans alanı (9), doğrusal olmayan (9), asimetri (6).
+//! - **Sinyal:** SciPy eşdeğeri Butterworth tasarımı ([`filter`]), NeuroKit2 uyumlu sıfır fazlı EKG
+//!   temizleme ve paket paket akış filtresi ([`ecg`]), R tepe tespiti (NeuroKit2 yöntemi), Kubios
+//!   artefakt düzeltme, boşluk farkında RR ([`gaps`]), mutlak sinyal kalitesi indeksleri ([`sqi`]).
+//! - **HRV, 41 metrik:** zaman alanı (17), frekans alanı (9), doğrusal olmayan (9), asimetri (6).
 //!
 //! ```
 //! // R tepe indekslerinden (512 Hz) bütün metrikler
@@ -16,9 +17,9 @@
 //!
 //! ## Özellikler (features)
 //! - `serde` — rapor yapılarını serileştirme
-//! - `parallel` — rayon ile çoklu iş parçacığı
-//! - `simd` — SIMD yardımcıları
-//! - `python` — PyO3 ile Python bağlaması
+//! - `parallel` — ayrılmış, şu an etkisiz
+//! - `simd` — taşınabilir döngü açma yardımcıları (CPU'ya özel talimat yok, varsayılan kapalı)
+//! - `python` — PyO3 ile Python bağlaması (`import fast_hrv`)
 //!
 //! Kaynak: `omrylcn/fast_hrv` (fast_hrv_rs) üzerine kurulmuştur.
 

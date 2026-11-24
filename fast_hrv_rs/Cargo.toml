@@ -3,7 +3,7 @@ name = "fast-hrv"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Fast, dependency-light heart rate variability (HRV) analysis from ECG: R-peaks, artifact correction, 39 time/frequency/nonlinear metrics"
+description = "Fast, dependency-light heart rate variability (HRV) analysis from ECG: R-peaks, artifact correction, signal quality, 41 time/frequency/nonlinear/asymmetry metrics"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/omrylcn/fast_hrv"
 readme = "README.md"
@@ -32,3 +32,7 @@ numpy = { version = "0.22", optional = true }
 approx = "0.5"
 serde_json = "1.0"
 
+
+[[bench]]
+name = "throughput"
+harness = false

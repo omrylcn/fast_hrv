@@ -4,7 +4,7 @@ use std::fmt;
 
 /// Errors returned by the validating APIs of this crate.
 ///
-/// The older convenience functions (for example [`crate::ecg_clean`] or [`crate::hrv`]) never panic;
+/// The older convenience functions (for example [`crate::ecg_clean`] or [`crate::hrv()`]) never panic;
 /// on invalid input they return `NaN` values instead. The `try_*` / builder APIs return this error.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HrvError {
