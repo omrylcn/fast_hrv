@@ -170,6 +170,27 @@ Sunucu CPU'su farklı ve eski, AVX yok. Bu ölçüm onun yerine geçmez; **sayı
 - **Planlama için güvenlik çarpanı 5:** 500 kullanıcı ≈ 128 ms/sn (%13 çekirdek); yayılmış en kötü
   saniye ≈ 155 ms; hizalı 5 dk adımı ≈ 7 s (yayma olmadan kabul edilemez).
 
+### Sunucuda ölçüm (2026-11-24, app team)
+
+hedef sunucu: Intel Xeon E7-4850 @ 2,0 GHz (2011, Westmere-EX), AVX yok; başlık
+`build assumes AVX: no | CPU supports AVX: no`. Düşük öncelikte, tek iş parçacığı, aynı komut
+(`cargo bench --bench capacity`, 500 kullanıcı × 600 sn).
+
+| | test makinesi (i7-9700K, turbo) | hedef sunucu (Xeon E7-4850) |
+|---|---|---|
+| CPU / kullanıcı / sn | 51,3 µs | **248 µs** (~4,8×; tahmin edilen ×5 tuttu) |
+| 500 kullanıcı, yayılmış | çekirdeğin %2,6'sı | **çekirdeğin %12,4'ü** |
+| tek çekirdek, %50 bütçe | ~9.700 kullanıcı | **~2.000 kullanıcı** |
+| en kötü saniye, yayılmış | 31 ms | **241 ms** |
+| en kötü saniye, hepsi hizalı | 1,57 s | **7,5 s** (600 sn'nin 66'sında 500 ms üstü) |
+| bellek, 500 oturum | 48 MiB | 48 MiB |
+
+Lead kararı (app-pipeline tasarımına girdi): 500 eşzamanlı oturum hedefi bu sunucuda tutuyor
+(ortalama ~%12 çekirdek). **Yayma zorunlu**: 60 sn ve 5 dk adımları oturumun kendi başlangıcına
+bağlı, duvar saatine değil. **Saniyelik bütçeli kuyruk zorunlu** (ör. ağır işler ≤ 200 ms/sn):
+yeniden başlatmada herkes aynı anda bağlanırsa 7,5 sn'lik tepe oluşur, kuyruk bunu yayar.
+Ölçülmeyenler (DB okuma, paket çözme) işçi tasarımında ayrıca ölçülecek.
+
 Sonuç: 500 eşzamanlı oturum tek çekirdekte gerçekçi; fast-hrv'nin hesap maliyeti bütçenin küçük bir
 kısmı. Asıl risk ani yük; yayma + öncelikli kuyruk ile çözülür. İşçinin geri kalanı (G/Ç, veritabanı)
 muhtemelen hesaptan pahalı olacak, ayrıca ölçülmeli.
