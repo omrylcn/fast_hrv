@@ -174,15 +174,35 @@ turları bloklar hâlinde ölçülüyor; aşama 1: 3,91 µs, önce 3,94).
 - Oturum başına: `EcgStreamFilter` + `StreamDetector` + ham sayım halkası (düz hat / satürasyon için); temiz
   halka gerekmez. SQI `push_with` geri çağrısında, pencerenin kendi tespitleriyle çalışır.
 - Canlı = geçmiş: geçmişi yeniden işlerken `dual_detect_windowed` (ya da yeni bir `StreamDetector`) aynı
-  mutlak `start_index` ile aynı tepeleri verir.
+  mutlak `start_index` ile aynı tepeleri verir, **ancak** geçmiş de canlıdakiyle aynı nedensel
+  `EcgStreamFilter` ile, her segment başında (boşlukta) sıfırlanarak temizlenmelidir. Geçmiş sıfır fazlı
+  `ecg_clean_zero_phase` ile temizlenirse tepeler ~8–10 ms kayar; RW1'in gürültülü oturumlarında
+  (S04/S05) tepelerin %16–26'sı 50 ms içinde eşleşmez. Yeniden işleme yolu filtre seçimini canlıyla
+  paylaşmalı.
+- Paketli girdide gecikme üst sınırı fiilen `max_latency_samples()` + (paket boyu − 1) örnektir: tepe, onu
+  serbest bırakan paketin sonunda bildirilir (RW1, 32 örneklik paket: en çok 6325 örnek ≈ 12,35 sn).
 - Tepe çıktısı `u64` indeks + `f64` konum; RR için `rri_from_positions`, boşluk için dönen `Gap`'ler.
 
 ## 8. Ölçülmeyenler / açık
 
 - Sunucuda (Xeon E7-4850) `--stream` ölçümü yapılmadı; aynı hesap yapıldığı için oranın (×~4,8) aynı
   kalması beklenir.
-- NeuroKit2 ile ek doğruluk ölçümü gerekmedi: akış çıktısı batch'le birebir aynı, batch'in NK parity'si
-  ve doğruluk testleri (`tests/detect.rs`) geçerli.
+- Akış çıktısı aynı (nedensel) filtreli batch yolla birebir aynı; batch'in NK parity'si ve doğruluk
+  testleri (`tests/detect.rs`) geçerli. **Ama** CHANGES-DETECT.md'deki gerçek veri F1 sayıları sıfır fazlı
+  filtreyle ölçülmüştü. Nedensel akış zinciri Python NeuroKit referansına göre 50 ms'de 0,006–0,078 daha
+  düşük (tepeler medyan ~7,8–9,8 ms geç); 150 ms'de fark büyük ölçüde kapanıyor. Ayrıntı:
+  local validation notes (yerel, yalnızca özet sayılar).
+
+  | Oturum | sıfır faz ve Python NK (50 ms) | akış ve Python NK (50 ms) | akış birincil ve kendi NK ikincili |
+  |---|---|---|---|
+  | S01 | 0,947 | 0,929 | 0,955 |
+  | S02 | 0,941 | 0,935 | 0,931 |
+  | S03 | 0,902 | 0,887 | 0,865 |
+  | S04 | 0,443 | 0,365 | 0,416 |
+  | S05 | 0,431 | 0,396 | 0,440 |
+
+  RW1'de akış = batch eşitliği gerçek veride de doğrulandı: 6918 birincil + 7251 ikincil tepe, 32 / 1 /
+  rastgele paketleme, 0 uyuşmazlık; gecikme 2,31–12,35 sn (ortalama 7,32).
 
 ## 9. (B) Düşük gecikmeli tek geçişli detektör: tasarım (uygulanmadı)
 
