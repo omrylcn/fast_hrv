@@ -444,3 +444,165 @@ fn dual_detect_reports_disagreement_on_noise() {
     assert!(flat.bsqi.is_none() && flat.primary.indices.is_empty());
     assert!(dual_detect(&c, 0.0, &DualConfig::default()).is_err());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Windowed long-recording processing
+// ---------------------------------------------------------------------------------------------
+
+use fast_hrv::detect::{WindowConfig, detect_windowed, elgendi_refined_windowed};
+
+fn windowed_primary(c: &[f64], start: u64) -> Vec<f64> {
+    elgendi_refined_windowed(
+        c,
+        FS,
+        start,
+        &WindowConfig::default(),
+        &ElgendiConfig::default(),
+        &RefineConfig::default(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn windowed_30_min_recording_does_not_lock_up() {
+    let minutes = 30usize;
+    let mut s = synth_ecg(FS, minutes as f64 * 60.0, 1234, 0.03, 1.0);
+    // Artifacts: 20 s of strong broadband noise at 7:00 and a 3 s electrode pop (huge step +
+    // spikes) at 15:00. A detector whose threshold adapts to them would stay blind afterwards.
+    let mut rng = Rng(99);
+    let art = [(420.0, 440.0), (900.0, 903.0)];
+    for (i, v) in s.signal.iter_mut().enumerate() {
+        let t = i as f64 / FS;
+        if (art[0].0..art[0].1).contains(&t) {
+            *v += 8.0 * rng.gauss();
+        }
+        if (art[1].0..art[1].1).contains(&t) {
+            *v += 40.0 + if i % 97 == 0 { 200.0 } else { 0.0 };
+        }
+    }
+    let c = clean(&s.signal);
+    let peaks = windowed_primary(&c, 0);
+    // single pass over the whole recording, for comparison (global β·mean(energy))
+    let single = elgendi_peaks(&c, FS, &ElgendiConfig::default()).unwrap();
+
+    let per_minute = |p: &[f64]| -> Vec<usize> {
+        let mut v = vec![0usize; minutes];
+        for &x in p {
+            let m = (x / FS / 60.0) as usize;
+            if m < minutes {
+                v[m] += 1;
+            }
+        }
+        v
+    };
+    let truth = per_minute(&s.r_true);
+    let win = per_minute(&peaks);
+    let one: Vec<f64> = single.iter().map(|&p| p as f64).collect();
+    let one = per_minute(&one);
+    eprintln!("minute  true  windowed  single-pass");
+    for m in 0..minutes {
+        eprintln!("{m:>6} {:>5} {:>9} {:>12}", truth[m], win[m], one[m]);
+    }
+    // A window is affected when its chunk (core ± margin) overlaps an artifact; its core is then
+    // allowed to lose beats (β·mean(energy) of that chunk is inflated). Other windows must not be.
+    let wc = WindowConfig::default();
+    let affected_window = |k: usize| {
+        let (c0, c1) = (
+            k as f64 * wc.window_s - wc.margin_s,
+            (k + 1) as f64 * wc.window_s + wc.margin_s,
+        );
+        art.iter().any(|&(a, b)| c0 < b && a < c1)
+    };
+    let per_min = (60.0 / wc.window_s) as usize;
+    let affected = |m: usize| (m * per_min..(m + 1) * per_min).any(affected_window);
+    for m in (0..minutes).filter(|&m| !affected(m)) {
+        assert!(
+            win[m].abs_diff(truth[m]) <= 1,
+            "minute {m}: windowed {} vs true {}",
+            win[m],
+            truth[m]
+        );
+    }
+    // accuracy in the unaffected windows: every true beat found within 1 sample, no extra beats
+    let clean_t = |x: f64| !affected_window((x / FS / wc.window_s) as usize);
+    let truth_ok: Vec<f64> = s
+        .r_true
+        .iter()
+        .copied()
+        .filter(|&x| clean_t(x) && x > FS)
+        .collect();
+    let det_ok: Vec<f64> = peaks
+        .iter()
+        .copied()
+        .filter(|&x| clean_t(x) && x > FS)
+        .collect();
+    let errs = errors_to_truth(&truth_ok, &det_ok);
+    let worst = errs.iter().cloned().fold(0.0, f64::max);
+    eprintln!(
+        "unaffected windows: true {} detected {} worst error {worst:.3} samples",
+        truth_ok.len(),
+        det_ok.len()
+    );
+    assert!(worst <= 1.0);
+    assert!(det_ok.len().abs_diff(truth_ok.len()) <= 1);
+    // no duplicates from the window overlaps
+    assert!(peaks.windows(2).all(|w| w[1] - w[0] > 0.25 * FS));
+}
+
+#[test]
+fn windowed_output_does_not_depend_on_the_recording_start() {
+    let s = synth_ecg(FS, 180.0, 4321, 0.03, 1.0);
+    let c = clean(&s.signal);
+    let full = windowed_primary(&c, 0);
+    let cfg = WindowConfig::default();
+    let w = (cfg.window_s * FS) as u64;
+    let m = (cfg.margin_s * FS) as u64;
+    for s0 in [1u64, 777, 5120, 12_345, 30_001] {
+        let part = windowed_primary(&c[s0 as usize..], s0);
+        // from the first window whose chunk starts inside both recordings, the outputs agree exactly
+        let k0 = (s0 + m).div_ceil(w) + 1;
+        let from = (k0 * w) as f64;
+        let a: Vec<f64> = full.iter().copied().filter(|&x| x >= from).collect();
+        let b: Vec<f64> = part.iter().copied().filter(|&x| x >= from).collect();
+        assert!(!a.is_empty());
+        assert_eq!(a, b, "start {s0}: outputs differ");
+    }
+    // the grid is absolute: shifting the start index without shifting the samples changes the grid
+    // (and is allowed to change the result), shifting both by a multiple of the window does not
+    // (up to the rounding of the larger absolute positions)
+    let shifted = windowed_primary(&c, 10 * w);
+    assert_eq!(shifted.len(), full.len());
+    for (x, y) in shifted.iter().zip(&full) {
+        assert!((x - (10 * w) as f64 - y).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn windowed_generic_detector_and_validation() {
+    let s = synth_ecg(FS, 60.0, 55, 0.02, 1.0);
+    let c = clean(&s.signal);
+    // any detector: here the NeuroKit2 method, integer peaks
+    let nk = detect_windowed(&c, FS, 0, &WindowConfig::default(), |chunk| {
+        Ok(fast_hrv::peaks::find_peaks_default(chunk, FS as u32)
+            .into_iter()
+            .map(|p| p as f64)
+            .collect())
+    })
+    .unwrap();
+    assert!(
+        nk.len().abs_diff(s.r_true.len()) <= 1,
+        "{} vs {}",
+        nk.len(),
+        s.r_true.len()
+    );
+    let bad = WindowConfig {
+        dedup_s: 6.0,
+        ..WindowConfig::default()
+    };
+    assert!(detect_windowed(&c, FS, 0, &bad, |_| Ok(vec![])).is_err());
+    assert!(
+        detect_windowed(&[], FS, 0, &WindowConfig::default(), |_| Ok(vec![1.0]))
+            .unwrap()
+            .is_empty()
+    );
+}

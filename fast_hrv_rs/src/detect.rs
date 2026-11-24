@@ -8,6 +8,8 @@
 //!   [`crate::rri_from_positions`] / [`crate::rri_from_times`] for RR intervals from them.
 //! - [`dual_detect`]: primary (Elgendi + refinement) and secondary (NeuroKit2 method) peaks on the
 //!   same window plus their bSQI. Results only, no quality gate.
+//! - [`detect_windowed`]: long recordings in fixed windows anchored at absolute sample indices,
+//!   detector restarted per window, overlap de-duplicated deterministically.
 //!
 //! All durations are given in seconds and converted with the sampling rate, so the detector is not
 //! tied to one sampling rate. Functions are stateless: the same input always gives the same peaks.
@@ -590,7 +592,7 @@ pub struct DualDetection {
 ///   by the real-data evaluation (more consistent with Elgendi than EngZee, see `CHANGES-DETECT.md`).
 ///
 /// `clean` is the wide-band clean ECG of one window (e.g. 10 s at 0.5–40 Hz). `fs` is rounded to
-/// an integer for the NeuroKit2 method. Stateless: for long recordings call it per window.
+/// an integer for the NeuroKit2 method. Stateless: for long recordings call it per window (or use [`detect_windowed`] per detector).
 pub fn dual_detect(clean: &[f64], fs: f64, cfg: &DualConfig) -> Result<DualDetection, HrvError> {
     check_fs(fs)?;
     check_finite(clean)?;
@@ -632,6 +634,129 @@ pub fn dual_detect(clean: &[f64], fs: f64, cfg: &DualConfig) -> Result<DualDetec
         secondary,
         secondary_raw,
         bsqi,
+    })
+}
+
+// =============================================================================
+// Windowed processing of long recordings
+// =============================================================================
+
+/// Parameters of [`detect_windowed`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct WindowConfig {
+    /// Core window length (s). The core windows `[k·W, (k+1)·W)` tile the absolute sample axis.
+    /// Default 10 s (the usual SQI window).
+    pub window_s: f64,
+    /// Context added on each side of a core window before running the detector, then discarded
+    /// (consecutive chunks overlap by `2·margin`). Covers filter and moving-average warm-up.
+    /// Default 2 s.
+    pub margin_s: f64,
+    /// Peaks from two adjacent windows closer than this are the same beat; the one deeper inside
+    /// its own core window is kept (ties: the earlier window). Must be `< window_s / 2`.
+    /// Default 0.15 s (below any physiological RR and the detectors' 0.3 s refractory period).
+    pub dedup_s: f64,
+}
+
+impl Default for WindowConfig {
+    fn default() -> Self {
+        Self {
+            window_s: 10.0,
+            margin_s: 2.0,
+            dedup_s: 0.15,
+        }
+    }
+}
+
+/// Run a detector over a long recording in fixed windows, restarting it in every window.
+///
+/// `signal[i]` is the sample at absolute index `start_sample + i` (e.g. samples since the start of
+/// the session, or of the device clock). The core windows `[k·W, (k+1)·W)` are anchored at absolute
+/// index 0, not at the start of `signal`. For each core window that overlaps the signal, `detect` is
+/// called on the chunk `[k·W − M, (k+1)·W + M)` (clipped to the signal) and returns peak positions
+/// relative to the chunk (samples, may be fractional). Peaks within `dedup` of the core are kept and
+/// duplicates between adjacent windows are removed deterministically (see [`WindowConfig::dedup_s`]).
+///
+/// Returns absolute peak positions (samples, sorted). Because every window is processed from scratch
+/// (no detector state survives a window, so an adaptive threshold cannot lock up), the output is a
+/// pure function of the samples around each window: two recordings that share samples give
+/// identical peaks wherever their chunks coincide, whatever sample they start at.
+pub fn detect_windowed<F>(
+    signal: &[f64],
+    fs: f64,
+    start_sample: u64,
+    cfg: &WindowConfig,
+    mut detect: F,
+) -> Result<Vec<f64>, HrvError>
+where
+    F: FnMut(&[f64]) -> Result<Vec<f64>, HrvError>,
+{
+    check_fs(fs)?;
+    if !(cfg.window_s.is_finite() && cfg.window_s > 0.0) {
+        return Err(HrvError::InvalidParameter("window_s"));
+    }
+    if !(cfg.margin_s.is_finite() && cfg.margin_s >= 0.0) {
+        return Err(HrvError::InvalidParameter("margin_s"));
+    }
+    let w = (cfg.window_s * fs).round().max(1.0) as u64;
+    let m = (cfg.margin_s * fs).round() as u64;
+    let dedup = cfg.dedup_s * fs;
+    if !(dedup.is_finite() && dedup >= 0.0 && dedup < w as f64 / 2.0) {
+        return Err(HrvError::InvalidParameter("dedup_s"));
+    }
+    let n = signal.len() as u64;
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    let (s0, s1) = (start_sample, start_sample + n);
+    // (absolute position, window, depth inside the window's core)
+    let mut found: Vec<(f64, u64, f64)> = Vec::new();
+    for k in s0 / w..=(s1 - 1) / w {
+        let (core0, core1) = (k * w, (k + 1) * w);
+        let c0 = core0.saturating_sub(m).max(s0);
+        let c1 = (core1 + m).min(s1);
+        let chunk = &signal[(c0 - s0) as usize..(c1 - s0) as usize];
+        for p in detect(chunk)? {
+            if !p.is_finite() {
+                return Err(HrvError::NonFinite);
+            }
+            let a = c0 as f64 + p;
+            let depth = (a - core0 as f64).min(core1 as f64 - a);
+            if depth >= -dedup {
+                found.push((a, k, depth));
+            }
+        }
+    }
+    found.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+    let mut kept: Vec<(f64, u64, f64)> = Vec::with_capacity(found.len());
+    for f in found {
+        match kept.last_mut() {
+            Some(last) if last.1 != f.1 && f.0 - last.0 < dedup => {
+                let better = f.2 > last.2 || (f.2 == last.2 && f.1 < last.1);
+                if better {
+                    *last = f;
+                }
+            }
+            _ => kept.push(f),
+        }
+    }
+    Ok(kept.into_iter().map(|f| f.0).collect())
+}
+
+/// [`detect_windowed`] with the primary detector: [`elgendi_peaks`] + [`refine_peaks`] in every
+/// window (the refinement polarity is chosen per window when [`Polarity::Auto`]).
+/// Returns absolute sub-sample positions.
+pub fn elgendi_refined_windowed(
+    clean: &[f64],
+    fs: f64,
+    start_sample: u64,
+    window: &WindowConfig,
+    elgendi: &ElgendiConfig,
+    refine: &RefineConfig,
+) -> Result<Vec<f64>, HrvError> {
+    detect_windowed(clean, fs, start_sample, window, |chunk| {
+        let raw = elgendi_peaks(chunk, fs, elgendi)?;
+        Ok(refine_peaks(chunk, fs, &raw, refine)?.positions)
     })
 }
 
