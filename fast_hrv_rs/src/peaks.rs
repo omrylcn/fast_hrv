@@ -561,6 +561,7 @@ impl Corrections {
 /// (tested on the NeuroKit2 fixtures). Build variants with struct update syntax, e.g.
 /// `KubiosParams { alpha: 6.0, ..Default::default() }`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KubiosParams {
     /// Ectopic decision line `s12 < -c1·dRR - c2` (and its mirror), slope.
     pub c1: f64,
@@ -928,7 +929,7 @@ fn classify_artifacts(
 /// Peak position type of the generic Kubios core: integer sample indices (`usize`) or `f64`
 /// positions. Only RR (`as_f64` differences) and ordering are needed; the midpoint rule is passed
 /// separately.
-trait PeakPos: Copy {
+pub(crate) trait PeakPos: Copy {
     fn as_f64(self) -> f64;
     fn cmp_pos(&self, other: &Self) -> std::cmp::Ordering;
 }
@@ -975,9 +976,19 @@ pub fn detect_artifacts_positions(
 }
 
 fn detect_core<T: PeakPos>(peaks: &[T], sampling_rate: f64, params: &KubiosParams) -> Artifacts {
+    detect_detail(peaks, sampling_rate, params).0
+}
+
+/// [`detect_core`] that also returns the centred rolling median RR (`medRR`, seconds, one value per
+/// beat; empty when no detection runs), used by the exclusion mode ([`crate::exclusion`]).
+pub(crate) fn detect_detail<T: PeakPos>(
+    peaks: &[T],
+    sampling_rate: f64,
+    params: &KubiosParams,
+) -> (Artifacts, Vec<f64>) {
     let n = peaks.len();
     if n < 3 || !sampling_rate.is_finite() || sampling_rate <= 0.0 {
-        return Artifacts::default();
+        return (Artifacts::default(), Vec::new());
     }
     let mut rr = vec![0.0; n];
     for i in 1..n {
@@ -1025,9 +1036,10 @@ fn detect_core<T: PeakPos>(peaks: &[T], sampling_rate: f64, params: &KubiosParam
         .map(|(&m, &t)| if t != 0.0 { m / t } else { f64::NAN })
         .collect();
 
-    classify_artifacts(
+    let artifacts = classify_artifacts(
         &drrs, &mrrs, &s12, &s22, &rr, &medrr, &th2, params.c1, params.c2,
-    )
+    );
+    (artifacts, medrr)
 }
 
 /// Shift every index in `update_idcs` by `update` for each source index below it.
@@ -1065,7 +1077,7 @@ fn remove_indices<X>(v: &mut Vec<X>, idcs: &[usize]) {
 }
 
 /// Origin marker of a beat that has no input beat (inserted by a missed-beat correction).
-const INSERTED: usize = usize::MAX;
+pub(crate) const INSERTED: usize = usize::MAX;
 
 /// Correct detected artifacts (NeuroKit2 `_correct_artifacts`): delete extra beats, insert missed
 /// beats, move ectopic and long/short beats to the midpoint of their neighbours (`mid(prev, next)`).
@@ -1139,7 +1151,7 @@ fn correct_core<T: PeakPos>(
 }
 
 /// Per-beat status of `output` (positions + origins) against `input` (see [`Corrections`]).
-fn compute_corrections<T: PeakPos>(input: &[T], output: &[(T, usize)]) -> Corrections {
+pub(crate) fn compute_corrections<T: PeakPos>(input: &[T], output: &[(T, usize)]) -> Corrections {
     let mut input_to_output: Vec<Option<usize>> = vec![None; input.len()];
     let mut status = vec![BeatStatus::Inserted; output.len()];
     // 1. exact position matches (both sequences sorted): unchanged
@@ -1177,12 +1189,25 @@ fn compute_corrections<T: PeakPos>(input: &[T], output: &[(T, usize)]) -> Correc
 /// Generic Kubios loop (validated input): detection + correction, repeated while the number of
 /// flags decreases (`params.iterative`). Returns (positions, cumulative flags, per-pass flags,
 /// per-beat corrections).
-fn fix_core<T: PeakPos>(
+///
+/// `artifact_only`: drop the ectopic and long/short flags of every pass before counting and
+/// correcting, so beats are only inserted (missed) or removed (extra) and never moved (the artifact
+/// passes of the exclusion mode). `false` is the published algorithm.
+pub(crate) fn fix_core<T: PeakPos>(
     peaks: &[T],
     sampling_rate: f64,
     params: &KubiosParams,
     mid: impl Fn(T, T) -> T + Copy,
+    artifact_only: bool,
 ) -> (Vec<T>, Artifacts, Vec<Artifacts>, Corrections) {
+    let detect = |p: &[T]| {
+        let mut a = detect_core(p, sampling_rate, params);
+        if artifact_only {
+            a.ectopic.clear();
+            a.longshort.clear();
+        }
+        a
+    };
     if peaks.len() < 3 {
         return (
             peaks.to_vec(),
@@ -1192,7 +1217,7 @@ fn fix_core<T: PeakPos>(
         );
     }
     let tagged: Vec<(T, usize)> = peaks.iter().copied().zip(0..).collect();
-    let first = detect_core(peaks, sampling_rate, params);
+    let first = detect(peaks);
     let mut clean = correct_core(&first, &tagged, mid);
     let mut current = first.total_count();
     let mut passes = vec![first];
@@ -1202,7 +1227,7 @@ fn fix_core<T: PeakPos>(
         loop {
             values.clear();
             values.extend(clean.iter().map(|p| p.0));
-            let next = detect_core(&values, sampling_rate, params);
+            let next = detect(&values);
             let count = next.total_count();
             if count >= current {
                 break;
@@ -1251,10 +1276,13 @@ pub fn fix_peaks_with(
     if !(sampling_rate.is_finite() && sampling_rate > 0.0) {
         return Err(HrvError::InvalidSamplingRate(sampling_rate));
     }
-    let (peaks, artifacts, passes, corrections) =
-        fix_core(peaks, sampling_rate, params, |prev: usize, next: usize| {
-            prev + (next - prev) / 2
-        });
+    let (peaks, artifacts, passes, corrections) = fix_core(
+        peaks,
+        sampling_rate,
+        params,
+        |prev: usize, next: usize| prev + (next - prev) / 2,
+        false,
+    );
     Ok(KubiosOutput {
         peaks,
         artifacts,
@@ -1305,12 +1333,20 @@ pub fn fix_positions_with_midpoint(
         return Err(HrvError::InvalidSamplingRate(sampling_rate));
     }
     let (positions, artifacts, passes, corrections) = match midpoint {
-        KubiosMidpoint::Exact => fix_core(positions, sampling_rate, params, |a: f64, b: f64| {
-            a + (b - a) / 2.0
-        }),
-        KubiosMidpoint::Floor => fix_core(positions, sampling_rate, params, |a: f64, b: f64| {
-            a + ((b - a) / 2.0).floor()
-        }),
+        KubiosMidpoint::Exact => fix_core(
+            positions,
+            sampling_rate,
+            params,
+            |a: f64, b: f64| a + (b - a) / 2.0,
+            false,
+        ),
+        KubiosMidpoint::Floor => fix_core(
+            positions,
+            sampling_rate,
+            params,
+            |a: f64, b: f64| a + ((b - a) / 2.0).floor(),
+            false,
+        ),
     };
     Ok(KubiosPositions {
         positions,

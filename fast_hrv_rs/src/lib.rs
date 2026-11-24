@@ -7,8 +7,9 @@
 //!   alt-örnek inceltme, iki detektörlü bSQI ve uzun kayıtlar için pencereli işleme: [`detect`]; aynı
 //!   pencereli çıktıyı paket paket veren akış detektörü: [`stream`]), Kubios
 //!   artefakt düzeltme (atım başına değişen/eklenen/silinen sonucu, alt-örnek konumlarda da:
-//!   [`peaks::fix_positions_with`]), boşluk farkında RR ([`gaps`]), mutlak sinyal kalitesi
-//!   indeksleri ([`sqi`]).
+//!   [`peaks::fix_positions_with`]), düzeltme yerine dışlama kipi (ektopik / şüpheli atım sınıfları,
+//!   NN geçerlilik maskesi, artefakt oranı: [`exclusion`]), boşluk farkında RR ([`gaps`]), mutlak
+//!   sinyal kalitesi indeksleri ([`sqi`]).
 //! - **HRV, 41 metrik:** zaman alanı (17), frekans alanı (9), doğrusal olmayan (9), asimetri (6).
 //!
 //! ```
@@ -33,6 +34,7 @@
 pub mod detect;
 pub mod ecg;
 pub mod error;
+pub mod exclusion;
 pub mod filter;
 pub mod frequency;
 pub mod gaps;
@@ -59,6 +61,10 @@ pub use ecg::{
     ecg_clean, ecg_clean_causal, ecg_clean_neurokit, ecg_clean_zero_phase, process_ecg,
 };
 pub use error::HrvError;
+pub use exclusion::{
+    ArtifactCounts, BeatClass, BeatExclusion, BeatFlags, ExclusionParams, ExclusionSummary,
+    RemovalReason, RemovedBeat, classify_beats, classify_peaks, classify_segments, concat_nn,
+};
 pub use frequency::{
     FrequencyDomain, FrequencyOptions, frequency_domain, frequency_domain_with, welch,
 };
