@@ -1,6 +1,6 @@
 [package]
 name = "fast-hrv"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Fast, dependency-light heart rate variability (HRV) analysis from ECG: R-peaks, artifact correction, signal quality, 41 time/frequency/nonlinear/asymmetry metrics"

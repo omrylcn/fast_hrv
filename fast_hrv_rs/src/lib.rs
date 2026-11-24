@@ -3,7 +3,8 @@
 //! EKG'den kalp hızı değişkenliğine (HRV) hızlı ve bağımlılıksız Rust kütüphanesi.
 //!
 //! - **Sinyal:** SciPy eşdeğeri Butterworth tasarımı ([`filter`]), NeuroKit2 uyumlu sıfır fazlı EKG
-//!   temizleme ve paket paket akış filtresi ([`ecg`]), R tepe tespiti (NeuroKit2 yöntemi), Kubios
+//!   temizleme ve paket paket akış filtresi ([`ecg`]), R tepe tespiti (NeuroKit2 yöntemi; Elgendi,
+//!   alt-örnek inceltme, iki detektörlü bSQI ve uzun kayıtlar için pencereli işleme: [`detect`]), Kubios
 //!   artefakt düzeltme, boşluk farkında RR ([`gaps`]), mutlak sinyal kalitesi indeksleri ([`sqi`]).
 //! - **HRV, 41 metrik:** zaman alanı (17), frekans alanı (9), doğrusal olmayan (9), asimetri (6).
 //!

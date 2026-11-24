@@ -2,6 +2,30 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] - unreleased
+
+### Added
+- `detect` module:
+  - `elgendi_peaks` / `elgendi_filter` / `elgendi_detect` with `ElgendiConfig`: Elgendi two-moving-average
+    QRS detector (8–20 Hz Butterworth order 2, squared signal, 97 ms / 611 ms moving averages,
+    β = 0.08, minimum block = QRS window, 0.3 s refractory). Presets `neurokit2013()` and
+    `neurokit2010()` reproduce NeuroKit2 0.3.0 `elgendi2013` / `elgendi2010` peaks exactly;
+    `DetectorFilter::ZeroPhase` option; `moving_average_causal` (bit-identical to NeuroKit2's MWA).
+  - `refine_peaks` with `RefineConfig` / `Polarity` (`Auto`, `Positive`, `Negative`, `Absolute`) →
+    `RefinedPeaks { indices, positions, sign }`: local extremum within ±50 ms on the clean signal plus
+    3-point parabolic interpolation (sub-sample positions); `parabolic_offset`, `auto_polarity`.
+  - `dual_detect` with `DualConfig` → `DualDetection`: Elgendi + refinement (primary) and the NeuroKit2
+    method (secondary) on the same window, plus `sqi::Bsqi` (default tolerance 0.15 s). No gate.
+  - `detect_windowed` / `elgendi_refined_windowed` with `WindowConfig`: fixed windows anchored at absolute
+    sample indices (default 10 s, 2 s margin, 0.15 s de-duplication), detector restarted per window.
+- `rri_from_positions`, `rri_from_times`, `try_rri_from_times`: RR intervals from sub-sample peaks.
+- NeuroKit2 Elgendi fixtures (`tests/data/neurokit_elgendi.json`, `tools/detect_reference.py`) and
+  `tests/detect.rs` (parity, refinement accuracy on synthetic ECG with known R, dual detector, 30 min
+  windowed recording, start-index invariance); detector rows in `benches/throughput.rs`.
+
+### Changed (breaking)
+- `HrvError` has a new variant `InvalidParameter(&'static str)` (exhaustive matches must handle it).
+
 ## [0.2.0] - unreleased
 
 First release of the `fast-hrv` crate, based on `fast_hrv_rs` (omrylcn/fast_hrv, commit `e969cb7`).

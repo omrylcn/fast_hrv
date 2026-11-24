@@ -367,6 +367,10 @@ pub fn elgendi_detect(
 /// `signal` is a raw or cleaned ECG (any band containing 8–20 Hz). The returned indices are the
 /// detector's own fiducials; with the default causal filter they lie ~35–40 ms after the R peak of
 /// the clean signal. Use [`refine_peaks`] to move them onto the R maximum.
+///
+/// The threshold offset `β · mean(energy)` is computed over the whole input, so one large artifact
+/// raises it everywhere: run long recordings through [`detect_windowed`] /
+/// [`elgendi_refined_windowed`] (10 s windows) rather than in a single pass.
 pub fn elgendi_peaks(signal: &[f64], fs: f64, cfg: &ElgendiConfig) -> Result<Vec<usize>, HrvError> {
     cfg.validate(fs)?;
     let filtered = elgendi_filter(signal, fs, cfg)?;
