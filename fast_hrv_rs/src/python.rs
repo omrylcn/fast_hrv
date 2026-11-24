@@ -2,14 +2,13 @@
 //!
 //! Build with: maturin develop --release --features python
 
-use pyo3::prelude::*;
 use numpy::{PyArray1, PyReadonlyArray1, ToPyArray};
+use pyo3::prelude::*;
 
 use crate::{
-    ecg_clean, process_ecg, compute_quality,
-    find_peaks_default, fix_peaks_default,
-    compute_rmssd, compute_pnn50, compute_pnn20, std_ddof, mean,
-    compute_apen, compute_sampen, compute_poincare, compute_dfa,
+    compute_apen, compute_dfa, compute_pnn20, compute_pnn50, compute_poincare, compute_quality,
+    compute_rmssd, compute_sampen, ecg_clean, find_peaks_default, fix_peaks_default, mean,
+    process_ecg, std_ddof,
 };
 
 // =============================================================================
@@ -51,7 +50,12 @@ fn py_fix_peaks<'py>(
     peaks: PyReadonlyArray1<'py, i64>,
     sampling_rate: u32,
 ) -> PyResult<(Bound<'py, PyArray1<i64>>, PyObject)> {
-    let peaks: Vec<usize> = peaks.as_slice().unwrap().iter().map(|&x| x as usize).collect();
+    let peaks: Vec<usize> = peaks
+        .as_slice()
+        .unwrap()
+        .iter()
+        .map(|&x| x as usize)
+        .collect();
     let (fixed, artifacts) = fix_peaks_default(&peaks, sampling_rate);
 
     let fixed_i64: Vec<i64> = fixed.into_iter().map(|x| x as i64).collect();
@@ -76,11 +80,19 @@ fn py_compute_quality<'py>(
     sampling_rate: u32,
 ) -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
     let ecg_cleaned = ecg_cleaned.as_slice().unwrap();
-    let rpeaks: Vec<usize> = rpeaks.as_slice().unwrap().iter().map(|&x| x as usize).collect();
+    let rpeaks: Vec<usize> = rpeaks
+        .as_slice()
+        .unwrap()
+        .iter()
+        .map(|&x| x as usize)
+        .collect();
 
     let (quality, quality_per_beat) = compute_quality(ecg_cleaned, &rpeaks, sampling_rate);
 
-    (quality.to_pyarray_bound(py), quality_per_beat.to_pyarray_bound(py))
+    (
+        quality.to_pyarray_bound(py),
+        quality_per_beat.to_pyarray_bound(py),
+    )
 }
 
 /// Full ECG processing pipeline
@@ -234,7 +246,7 @@ fn py_hrv_metrics(py: Python<'_>, rr: PyReadonlyArray1<f64>) -> PyResult<PyObjec
     dict.set_item("pnn20", compute_pnn20(rr))?;
 
     // Nonlinear
-    let r = 0.2 * std_ddof(rr, 1);  // Standard r value
+    let r = 0.2 * std_ddof(rr, 1); // Standard r value
     dict.set_item("apen", compute_apen(rr, 2, Some(r)))?;
     dict.set_item("sampen", compute_sampen(rr, 2, Some(r)))?;
 
@@ -284,4 +296,3 @@ fn fast_hrv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     Ok(())
 }
-

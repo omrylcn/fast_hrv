@@ -215,4 +215,3 @@ mod tests {
         assert!((output[4] - 9.0).abs() < 1e-10);
     }
 }
-

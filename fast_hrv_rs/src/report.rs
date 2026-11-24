@@ -7,9 +7,9 @@
 //! ```
 
 use crate::{
-    frequency::{frequency_domain, FrequencyDomain},
+    frequency::{FrequencyDomain, frequency_domain},
     hrv::{compute_apen, compute_asymmetry, compute_dfa, compute_poincare, compute_sampen},
-    time_domain::{time_domain, TimeDomain},
+    time_domain::{TimeDomain, time_domain},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -100,7 +100,10 @@ pub fn hrv(rri: &[f64]) -> HrvReport {
 
 /// R tepe örnek indekslerinden (ve örnekleme frekansından) NN aralıkları (ms).
 pub fn rri_from_peaks(peaks: &[usize], sampling_rate: u32) -> Vec<f64> {
-    peaks.windows(2).map(|w| (w[1] - w[0]) as f64 * 1000.0 / sampling_rate as f64).collect()
+    peaks
+        .windows(2)
+        .map(|w| (w[1] - w[0]) as f64 * 1000.0 / sampling_rate as f64)
+        .collect()
 }
 
 #[cfg(test)]
@@ -128,18 +131,30 @@ mod tests {
         }
         let r = hrv(&rri);
         for (name, v) in [
-            ("sdnn", r.time.sdnn), ("rmssd", r.time.rmssd), ("hti", r.time.hti), ("lf", r.frequency.lf),
-            ("hf", r.frequency.hf), ("lf_hf", r.frequency.lf_hf), ("sd1", r.nonlinear.sd1),
-            ("sampen", r.nonlinear.sampen), ("dfa_alpha1", r.nonlinear.dfa_alpha1), ("gi", r.asymmetry.gi),
+            ("sdnn", r.time.sdnn),
+            ("rmssd", r.time.rmssd),
+            ("hti", r.time.hti),
+            ("lf", r.frequency.lf),
+            ("hf", r.frequency.hf),
+            ("lf_hf", r.frequency.lf_hf),
+            ("sd1", r.nonlinear.sd1),
+            ("sampen", r.nonlinear.sampen),
+            ("dfa_alpha1", r.nonlinear.dfa_alpha1),
+            ("gi", r.asymmetry.gi),
         ] {
             assert!(v.is_finite(), "{name} = {v}");
         }
-        assert!(r.frequency.hf > r.frequency.lf, "solunum genliği daha büyük");
+        assert!(
+            r.frequency.hf > r.frequency.lf,
+            "solunum genliği daha büyük"
+        );
     }
 
     #[test]
     fn rri_from_peak_indices() {
-        assert_eq!(rri_from_peaks(&[0, 512, 1024, 1536], 512), vec![1000.0, 1000.0, 1000.0]);
+        assert_eq!(
+            rri_from_peaks(&[0, 512, 1024, 1536], 512),
+            vec![1000.0, 1000.0, 1000.0]
+        );
     }
 }
-

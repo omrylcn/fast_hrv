@@ -37,7 +37,17 @@ pub struct FrequencyDomain {
 impl FrequencyDomain {
     fn nan() -> Self {
         let n = f64::NAN;
-        Self { vlf: n, lf: n, hf: n, total_power: n, lf_hf: n, lfnu: n, hfnu: n, lf_peak: n, hf_peak: n }
+        Self {
+            vlf: n,
+            lf: n,
+            hf: n,
+            total_power: n,
+            lf_hf: n,
+            lfnu: n,
+            hfnu: n,
+            lf_peak: n,
+            hf_peak: n,
+        }
     }
 }
 
@@ -45,7 +55,10 @@ impl FrequencyDomain {
 pub fn cubic_spline(x: &[f64], y: &[f64], xs: &[f64]) -> Vec<f64> {
     let n = x.len();
     if n < 3 {
-        return xs.iter().map(|_| y.first().copied().unwrap_or(f64::NAN)).collect();
+        return xs
+            .iter()
+            .map(|_| y.first().copied().unwrap_or(f64::NAN))
+            .collect();
     }
     // İkinci türevler (doğal sınır: uçlarda 0), üç köşegenli sistem (Thomas algoritması)
     let mut m = vec![0.0; n];
@@ -74,7 +87,11 @@ pub fn cubic_spline(x: &[f64], y: &[f64], xs: &[f64]) -> Vec<f64> {
         let h = x[k + 1] - x[k];
         let a = (x[k + 1] - t) / h;
         let b = (t - x[k]) / h;
-        out.push(a * y[k] + b * y[k + 1] + ((a.powi(3) - a) * m[k] + (b.powi(3) - b) * m[k + 1]) * h * h / 6.0);
+        out.push(
+            a * y[k]
+                + b * y[k + 1]
+                + ((a.powi(3) - a) * m[k] + (b.powi(3) - b) * m[k + 1]) * h * h / 6.0,
+        );
     }
     out
 }
@@ -125,7 +142,9 @@ pub fn welch(signal: &[f64], fs: f64, nperseg: usize) -> (Vec<f64>, Vec<f64>) {
     let nfft = nperseg.next_power_of_two();
     let step = (nperseg / 2).max(1);
     // Periyodik Hann penceresi (SciPy get_window('hann') varsayılanı)
-    let win: Vec<f64> = (0..nperseg).map(|i| 0.5 - 0.5 * (2.0 * PI * i as f64 / nperseg as f64).cos()).collect();
+    let win: Vec<f64> = (0..nperseg)
+        .map(|i| 0.5 - 0.5 * (2.0 * PI * i as f64 / nperseg as f64).cos())
+        .collect();
     let win_pow: f64 = win.iter().map(|w| w * w).sum();
     let n_freq = nfft / 2 + 1;
     let mut psd = vec![0.0; n_freq];
@@ -210,8 +229,16 @@ pub fn frequency_domain(rri: &[f64]) -> FrequencyDomain {
         hf,
         total_power: vlf + lf + hf,
         lf_hf: if hf > 0.0 { lf / hf } else { f64::NAN },
-        lfnu: if lfhf_sum > 0.0 { lf / lfhf_sum * 100.0 } else { f64::NAN },
-        hfnu: if lfhf_sum > 0.0 { hf / lfhf_sum * 100.0 } else { f64::NAN },
+        lfnu: if lfhf_sum > 0.0 {
+            lf / lfhf_sum * 100.0
+        } else {
+            f64::NAN
+        },
+        hfnu: if lfhf_sum > 0.0 {
+            hf / lfhf_sum * 100.0
+        } else {
+            f64::NAN
+        },
         lf_peak: band_peak(&freqs, &psd, LF),
         hf_peak: band_peak(&freqs, &psd, HF),
     }
@@ -254,12 +281,21 @@ mod tests {
         // Sabit olmayan bir sinüs: tepe frekansı doğru bulunmalı
         let fs = 4.0;
         let f0 = 0.25;
-        let x: Vec<f64> = (0..1024).map(|i| (2.0 * PI * f0 * i as f64 / fs).sin()).collect();
+        let x: Vec<f64> = (0..1024)
+            .map(|i| (2.0 * PI * f0 * i as f64 / fs).sin())
+            .collect();
         let (f, p) = welch(&x, fs, 256);
-        let peak = f.iter().zip(&p).max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+        let peak = f
+            .iter()
+            .zip(&p)
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
         assert_relative_eq!(*peak, f0, epsilon = fs / 256.0);
         // Sinüsün gücü (genlik²/2 = 0.5) ≈ PSD'nin integrali
-        let total: f64 = (1..f.len()).map(|k| 0.5 * (p[k - 1] + p[k]) * (f[k] - f[k - 1])).sum();
+        let total: f64 = (1..f.len())
+            .map(|k| 0.5 * (p[k - 1] + p[k]) * (f[k] - f[k - 1]))
+            .sum();
         assert_relative_eq!(total, 0.5, epsilon = 0.05);
     }
 
@@ -299,4 +335,3 @@ mod tests {
         assert!(frequency_domain(&[800.0; 20]).lf.is_nan()); // 16 sn < 30 sn
     }
 }
-

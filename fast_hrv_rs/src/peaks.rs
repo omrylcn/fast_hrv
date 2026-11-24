@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 /// Sliding window for O(n log k) median/percentile computation
 struct SlidingWindow {
-    tree: BTreeMap<OrderedFloat<f64>, usize>,  // value -> count
+    tree: BTreeMap<OrderedFloat<f64>, usize>, // value -> count
     size: usize,
 }
 
@@ -111,9 +111,7 @@ pub fn uniform_filter1d(signal: &[f64], size: usize) -> Vec<f64> {
     let inv_size = 1.0 / size as f64;
 
     // Helper to get clamped value (nearest mode)
-    let get = |i: isize| -> f64 {
-        signal[i.clamp(0, (n - 1) as isize) as usize]
-    };
+    let get = |i: isize| -> f64 { signal[i.clamp(0, (n - 1) as isize) as usize] };
 
     // Initialize sum for first position
     let mut sum = 0.0;
@@ -272,9 +270,7 @@ fn uniform_filter_fast(input: &[f64], output: &mut [f64], size: usize) {
     let inv_size = 1.0 / size as f64;
 
     // Helper to get clamped value
-    let get = |i: isize| -> f64 {
-        input[i.clamp(0, (n - 1) as isize) as usize]
-    };
+    let get = |i: isize| -> f64 { input[i.clamp(0, (n - 1) as isize) as usize] };
 
     // Initialize sum
     let mut sum = 0.0;
@@ -426,7 +422,8 @@ fn compute_threshold_fast(signal: &[f64], alpha: f64, window_width: usize) -> Ve
     let q1 = percentile_filter(&abs_signal, 25.0, window_width);
     let q3 = percentile_filter(&abs_signal, 75.0, window_width);
 
-    q1.iter().zip(&q3)
+    q1.iter()
+        .zip(&q3)
         .map(|(&q1v, &q3v)| alpha * (q3v - q1v) / 2.0)
         .collect()
 }
@@ -596,7 +593,9 @@ fn find_artifacts_fast(
     let th1 = compute_threshold_fast(&drrs, alpha, window_width);
 
     // Normalize drrs
-    let drrs_norm: Vec<f64> = drrs.iter().zip(&th1)
+    let drrs_norm: Vec<f64> = drrs
+        .iter()
+        .zip(&th1)
         .map(|(&d, &t)| if t != 0.0 { d / t } else { f64::NAN })
         .collect();
 
@@ -605,7 +604,9 @@ fn find_artifacts_fast(
 
     // mRRs: deviation from median
     let medrr = median_filter(&rr, medfilt_order);
-    let mrrs: Vec<f64> = rr.iter().zip(&medrr)
+    let mrrs: Vec<f64> = rr
+        .iter()
+        .zip(&medrr)
         .map(|(&r, &m)| {
             let diff = r - m;
             if diff < 0.0 { diff * 2.0 } else { diff }
@@ -616,12 +617,16 @@ fn find_artifacts_fast(
     let th2 = compute_threshold_fast(&mrrs, alpha, window_width);
 
     // Normalize mrrs
-    let mrrs_norm: Vec<f64> = mrrs.iter().zip(&th2)
+    let mrrs_norm: Vec<f64> = mrrs
+        .iter()
+        .zip(&th2)
         .map(|(&m, &t)| if t != 0.0 { m / t } else { f64::NAN })
         .collect();
 
     // Classify
-    classify_artifacts(&drrs_norm, &mrrs_norm, &s12, &s22, &rr, &medrr, &th2, c1, c2)
+    classify_artifacts(
+        &drrs_norm, &mrrs_norm, &s12, &s22, &rr, &medrr, &th2, c1, c2,
+    )
 }
 
 /// Update indices after insertion/deletion
@@ -630,7 +635,8 @@ fn update_indices(source_idcs: &[usize], update_idcs: &[usize], update: isize) -
         return vec![];
     }
 
-    let mut result: Vec<usize> = update_idcs.iter()
+    let mut result: Vec<usize> = update_idcs
+        .iter()
         .map(|&u| {
             let mut new_u = u as isize;
             for &s in source_idcs {
@@ -671,7 +677,8 @@ fn correct_artifacts(artifacts: &Artifacts, peaks: &[usize]) -> Vec<usize> {
 
     // Add missing peaks
     if !missed_idcs.is_empty() {
-        let valid_missed: Vec<usize> = missed_idcs.iter()
+        let valid_missed: Vec<usize> = missed_idcs
+            .iter()
             .filter(|&&i| i > 1 && i < peaks_clean.len())
             .cloned()
             .collect();
@@ -690,7 +697,8 @@ fn correct_artifacts(artifacts: &Artifacts, peaks: &[usize]) -> Vec<usize> {
     // Correct misaligned (ectopic + longshort)
     for idcs in [&ectopic_idcs, &longshort_idcs] {
         if !idcs.is_empty() {
-            let valid_idcs: Vec<usize> = idcs.iter()
+            let valid_idcs: Vec<usize> = idcs
+                .iter()
                 .filter(|&&i| i > 1 && i + 1 < peaks_clean.len())
                 .cloned()
                 .collect();
@@ -737,14 +745,30 @@ pub fn fix_peaks(
         return (peaks.to_vec(), Artifacts::default());
     }
 
-    let mut artifacts = find_artifacts_fast(peaks, sampling_rate, c1, c2, alpha, window_width, medfilt_order);
+    let mut artifacts = find_artifacts_fast(
+        peaks,
+        sampling_rate,
+        c1,
+        c2,
+        alpha,
+        window_width,
+        medfilt_order,
+    );
     let mut peaks_clean = correct_artifacts(&artifacts, peaks);
 
     if iterative {
         let mut n_artifacts_current = artifacts.total_count();
 
         loop {
-            let new_artifacts = find_artifacts_fast(&peaks_clean, sampling_rate, c1, c2, alpha, window_width, medfilt_order);
+            let new_artifacts = find_artifacts_fast(
+                &peaks_clean,
+                sampling_rate,
+                c1,
+                c2,
+                alpha,
+                window_width,
+                medfilt_order,
+            );
             let n_artifacts_new = new_artifacts.total_count();
 
             if n_artifacts_new >= n_artifacts_current {
@@ -766,7 +790,11 @@ pub fn fix_peaks_default(peaks: &[usize], sampling_rate: u32) -> (Vec<usize>, Ar
 }
 
 /// Main entry point: find R-peaks with optional artifact correction
-pub fn ecg_peaks(ecg_cleaned: &[f64], sampling_rate: u32, correct_artifacts: bool) -> (Vec<usize>, Artifacts) {
+pub fn ecg_peaks(
+    ecg_cleaned: &[f64],
+    sampling_rate: u32,
+    correct_artifacts: bool,
+) -> (Vec<usize>, Artifacts) {
     let peaks = find_peaks_default(ecg_cleaned, sampling_rate);
 
     if correct_artifacts {
@@ -823,9 +851,26 @@ mod tests {
         // = [1.333, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 9.666]
         let signal = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         let filtered = uniform_filter1d(&signal, 3);
-        let expected = vec![1.3333333333333333, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 9.666666666666666];
+        let expected = vec![
+            1.3333333333333333,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            6.0,
+            7.0,
+            8.0,
+            9.0,
+            9.666666666666666,
+        ];
         for (i, (f, e)) in filtered.iter().zip(&expected).enumerate() {
-            assert!((f - e).abs() < 1e-10, "uniform_filter mismatch at {}: {} vs {}", i, f, e);
+            assert!(
+                (f - e).abs() < 1e-10,
+                "uniform_filter mismatch at {}: {} vs {}",
+                i,
+                f,
+                e
+            );
         }
     }
 
@@ -837,7 +882,13 @@ mod tests {
         let filtered = uniform_filter1d(&signal, 5);
         let expected = vec![16.0, 22.0, 30.0, 38.0, 44.0];
         for (i, (f, e)) in filtered.iter().zip(&expected).enumerate() {
-            assert!((f - e).abs() < 1e-10, "uniform_filter size=5 mismatch at {}: {} vs {}", i, f, e);
+            assert!(
+                (f - e).abs() < 1e-10,
+                "uniform_filter size=5 mismatch at {}: {} vs {}",
+                i,
+                f,
+                e
+            );
         }
     }
 
@@ -859,7 +910,13 @@ mod tests {
         let filtered = median_filter(&signal, 3);
         let expected = vec![1.0, 2.0, 9.0, 3.0, 8.0, 4.0, 7.0, 5.0, 6.0, 6.0];
         for (i, (f, e)) in filtered.iter().zip(&expected).enumerate() {
-            assert!((f - e).abs() < 1e-10, "median_filter mismatch at {}: {} vs {}", i, f, e);
+            assert!(
+                (f - e).abs() < 1e-10,
+                "median_filter mismatch at {}: {} vs {}",
+                i,
+                f,
+                e
+            );
         }
     }
 
@@ -871,7 +928,13 @@ mod tests {
         let filtered = percentile_filter(&signal, 25.0, 5);
         let expected = vec![1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
         for (i, (f, e)) in filtered.iter().zip(&expected).enumerate() {
-            assert!((f - e).abs() < 1e-10, "percentile_filter mismatch at {}: {} vs {}", i, f, e);
+            assert!(
+                (f - e).abs() < 1e-10,
+                "percentile_filter mismatch at {}: {} vs {}",
+                i,
+                f,
+                e
+            );
         }
     }
 
@@ -889,8 +952,12 @@ mod tests {
         // Add peaks at known locations
         for &pos in &[100, 300, 500, 700, 900] {
             signal[pos] = 1.0;
-            if pos > 0 { signal[pos - 1] = 0.3; }
-            if pos < 999 { signal[pos + 1] = 0.3; }
+            if pos > 0 {
+                signal[pos - 1] = 0.3;
+            }
+            if pos < 999 {
+                signal[pos + 1] = 0.3;
+            }
         }
 
         let peaks = find_peaks_default(&signal, 512);
@@ -929,4 +996,3 @@ mod tests {
         assert!(corrected.len() >= peaks.len());
     }
 }
-

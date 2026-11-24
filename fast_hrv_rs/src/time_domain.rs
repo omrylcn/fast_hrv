@@ -99,9 +99,23 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
     let nan = f64::NAN;
     if rri.len() < 3 {
         return TimeDomain {
-            mean_nn: nan, sdnn: nan, rmssd: nan, sdsd: nan, pnn50: nan, pnn20: nan, median_nn: nan,
-            mad_nn: nan, iqr_nn: nan, min_nn: nan, max_nn: nan, cvnn: nan, cvsd: nan, mean_hr: nan,
-            sd_hr: nan, hti: nan, tinn: nan,
+            mean_nn: nan,
+            sdnn: nan,
+            rmssd: nan,
+            sdsd: nan,
+            pnn50: nan,
+            pnn20: nan,
+            median_nn: nan,
+            mad_nn: nan,
+            iqr_nn: nan,
+            min_nn: nan,
+            max_nn: nan,
+            cvnn: nan,
+            cvsd: nan,
+            mean_hr: nan,
+            sd_hr: nan,
+            hti: nan,
+            tinn: nan,
         };
     }
     let mut sorted = rri.to_vec();
@@ -143,7 +157,9 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
 
-    const RRI: [f64; 10] = [800.0, 850.0, 790.0, 820.0, 880.0, 750.0, 810.0, 860.0, 800.0, 830.0];
+    const RRI: [f64; 10] = [
+        800.0, 850.0, 790.0, 820.0, 880.0, 750.0, 810.0, 860.0, 800.0, 830.0,
+    ];
 
     #[test]
     fn basic_statistics() {
@@ -185,4 +201,3 @@ mod tests {
         assert!(t.tinn >= 0.0);
     }
 }
-

@@ -3,7 +3,7 @@
 //! Optimized ECG processing for HRV analysis.
 //! Implements signal cleaning, quality assessment, and statistics computation.
 
-use crate::hrv::{compute_rmssd, compute_pnn50, compute_pnn20, std_ddof};
+use crate::hrv::{compute_pnn20, compute_pnn50, compute_rmssd, std_ddof};
 use crate::peaks::ecg_peaks;
 
 // =============================================================================
@@ -179,7 +179,8 @@ pub fn compute_quality(
     }
 
     // Calculate window size based on heart rate
-    let rr: Vec<f64> = rpeaks.windows(2)
+    let rr: Vec<f64> = rpeaks
+        .windows(2)
         .map(|w| (w[1] - w[0]) as f64 / sampling_rate as f64)
         .collect();
 
@@ -229,7 +230,8 @@ pub fn compute_quality(
         let mean: f64 = col.iter().sum::<f64>() / n_beats as f64;
         col_mean[j] = mean;
 
-        let variance: f64 = col.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n_beats - 1) as f64;
+        let variance: f64 =
+            col.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n_beats - 1) as f64;
         col_std[j] = if variance > 0.0 { variance.sqrt() } else { 1.0 };
     }
 
@@ -237,11 +239,13 @@ pub fn compute_quality(
     let mut dist: Vec<f64> = Vec::with_capacity(n_beats);
 
     for segment in &segments {
-        let z_mean: f64 = segment.iter()
+        let z_mean: f64 = segment
+            .iter()
             .zip(&col_mean)
             .zip(&col_std)
             .map(|((&x, &m), &s)| (x - m) / s)
-            .sum::<f64>() / segment_len as f64;
+            .sum::<f64>()
+            / segment_len as f64;
         dist.push(z_mean.abs());
     }
 
@@ -250,7 +254,9 @@ pub fn compute_quality(
     let max_d = dist.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
     let quality_per_beat: Vec<f64> = if max_d > min_d {
-        dist.iter().map(|&d| 1.0 - (d - min_d) / (max_d - min_d)).collect()
+        dist.iter()
+            .map(|&d| 1.0 - (d - min_d) / (max_d - min_d))
+            .collect()
     } else {
         vec![1.0; n_beats]
     };
@@ -319,11 +325,7 @@ pub struct EcgStats {
 }
 
 /// Compute ECG and HRV statistics
-pub fn compute_stats(
-    rpeaks: &[usize],
-    quality_per_beat: &[f64],
-    sampling_rate: u32,
-) -> EcgStats {
+pub fn compute_stats(rpeaks: &[usize], quality_per_beat: &[f64], sampling_rate: u32) -> EcgStats {
     let mut stats = EcgStats::default();
 
     if rpeaks.len() < 2 {
@@ -334,7 +336,8 @@ pub fn compute_stats(
     stats.n_peaks = rpeaks.len();
 
     // RR intervals in milliseconds
-    let rr_ms: Vec<f64> = rpeaks.windows(2)
+    let rr_ms: Vec<f64> = rpeaks
+        .windows(2)
         .map(|w| (w[1] - w[0]) as f64 / sampling_rate as f64 * 1000.0)
         .collect();
 
@@ -356,8 +359,14 @@ pub fn compute_stats(
     // Quality stats
     if !quality_per_beat.is_empty() {
         stats.mean_quality = quality_per_beat.iter().sum::<f64>() / quality_per_beat.len() as f64;
-        stats.min_quality = quality_per_beat.iter().cloned().fold(f64::INFINITY, f64::min);
-        stats.max_quality = quality_per_beat.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        stats.min_quality = quality_per_beat
+            .iter()
+            .cloned()
+            .fold(f64::INFINITY, f64::min);
+        stats.max_quality = quality_per_beat
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
         stats.n_low_quality_beats = quality_per_beat.iter().filter(|&&q| q < 0.5).count();
     }
 
@@ -396,11 +405,7 @@ pub struct EcgResult {
 /// 2. Detect R-peaks + Correct artifacts
 /// 3. Compute quality scores
 /// 4. Compute statistics
-pub fn process_ecg(
-    ecg_signal: &[f64],
-    sampling_rate: u32,
-    correct_artifacts: bool,
-) -> EcgResult {
+pub fn process_ecg(ecg_signal: &[f64], sampling_rate: u32, correct_artifacts: bool) -> EcgResult {
     // 1. Clean signal
     let ecg_cleaned = ecg_clean(ecg_signal, sampling_rate);
 
@@ -464,8 +469,12 @@ mod tests {
         for &pos in &[500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500] {
             if pos < signal.len() {
                 signal[pos] = 1.0;
-                if pos > 0 { signal[pos - 1] = 0.3; }
-                if pos + 1 < signal.len() { signal[pos + 1] = 0.3; }
+                if pos > 0 {
+                    signal[pos - 1] = 0.3;
+                }
+                if pos + 1 < signal.len() {
+                    signal[pos + 1] = 0.3;
+                }
             }
         }
 
@@ -478,8 +487,11 @@ mod tests {
     fn test_sos_filter_identity() {
         // Identity filter (b0=1, others=0)
         let sos = vec![SosSection {
-            b0: 1.0, b1: 0.0, b2: 0.0,
-            a1: 0.0, a2: 0.0,
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
         }];
         let signal = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         let mut buf_a = vec![0.0; signal.len()];
@@ -491,4 +503,3 @@ mod tests {
         }
     }
 }
-

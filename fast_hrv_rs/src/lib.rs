@@ -35,10 +35,11 @@ pub mod simd;
 #[cfg(feature = "python")]
 mod python;
 
-pub use ecg::{compute_quality, compute_stats, ecg_clean, process_ecg, EcgResult, EcgStats};
-pub use frequency::{frequency_domain, welch, FrequencyDomain};
+pub use ecg::{EcgResult, EcgStats, compute_quality, compute_stats, ecg_clean, process_ecg};
+pub use frequency::{FrequencyDomain, frequency_domain, welch};
 pub use hrv::*;
-pub use peaks::{ecg_peaks, find_peaks, find_peaks_default, fix_peaks, fix_peaks_default, Artifacts};
-pub use report::{hrv, rri_from_peaks, Asymmetry, HrvReport, NonLinear};
-pub use time_domain::{time_domain, TimeDomain};
-
+pub use peaks::{
+    Artifacts, ecg_peaks, find_peaks, find_peaks_default, fix_peaks, fix_peaks_default,
+};
+pub use report::{Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks};
+pub use time_domain::{TimeDomain, time_domain};
