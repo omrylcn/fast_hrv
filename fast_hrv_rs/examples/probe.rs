@@ -28,6 +28,14 @@ fn main() {
                 println!("{x}")
             }
         }
+        "detect" => {
+            let p: Vec<usize> = v.iter().map(|&x| x as usize).collect();
+            let a = fast_hrv::peaks::detect_artifacts(&p, fs as f64, &Default::default());
+            println!(
+                "{:?}\n{:?}\n{:?}\n{:?}",
+                a.ectopic, a.missed, a.extra, a.longshort
+            );
+        }
         "quality" => {
             let r = fast_hrv::process_ecg(&v, fs, false);
             let (_, q) = fast_hrv::compute_quality(&r.ecg_cleaned, &r.rpeaks, fs);
