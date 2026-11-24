@@ -26,6 +26,7 @@
 // Index loops are the clearest form for the DSP kernels here (several arrays indexed together).
 #![allow(clippy::needless_range_loop)]
 
+pub mod detect;
 pub mod ecg;
 pub mod error;
 pub mod filter;
@@ -43,6 +44,7 @@ pub mod simd;
 #[cfg(feature = "python")]
 mod python;
 
+pub use detect::{DetectorFilter, ElgendiConfig, elgendi_peaks};
 pub use ecg::{
     EcgFilterConfig, EcgResult, EcgStats, EcgStreamFilter, compute_quality, compute_stats,
     ecg_clean, ecg_clean_causal, ecg_clean_neurokit, ecg_clean_zero_phase, process_ecg,

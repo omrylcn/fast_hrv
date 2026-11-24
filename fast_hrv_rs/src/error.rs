@@ -24,6 +24,8 @@ pub enum HrvError {
     InvalidGap { start: f64, end: f64 },
     /// Not enough data for the requested computation.
     TooShort { needed: usize, got: usize },
+    /// A parameter is out of its valid range (the name is given).
+    InvalidParameter(&'static str),
 }
 
 impl fmt::Display for HrvError {
@@ -55,6 +57,7 @@ impl fmt::Display for HrvError {
             HrvError::TooShort { needed, got } => {
                 write!(f, "input too short: need {needed}, got {got}")
             }
+            HrvError::InvalidParameter(p) => write!(f, "invalid parameter: {p}"),
         }
     }
 }

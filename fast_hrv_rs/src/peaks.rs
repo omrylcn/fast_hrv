@@ -465,7 +465,7 @@ pub struct KubiosOutput {
 }
 
 /// NumPy's pairwise summation (`np.sum` / `np.mean` on float64), for bit-level parity.
-fn numpy_sum(x: &[f64]) -> f64 {
+pub(crate) fn numpy_sum(x: &[f64]) -> f64 {
     let n = x.len();
     if n < 8 {
         let mut s = 0.0;
