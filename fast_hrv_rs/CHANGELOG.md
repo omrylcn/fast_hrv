@@ -2,6 +2,43 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - unreleased
+
+### Added
+- `KubiosParams::threshold_floor_s` (default `0.0` = off): absolute lower bound in seconds on both
+  time-varying Lipponen–Tarvainen thresholds (Th1 for dRR, Th2 for mRR). With the default the floor is not
+  applied at all, so the output is bit-identical to 0.5.0 and to NeuroKit2. Th2 is also the missed/extra
+  tolerance, which a floor widens. `alpha` (default 5.2) documented as the threshold multiplier.
+- `exclusion` module, an alternative to Kubios correction/interpolation that moves no beat:
+  `classify_beats` (f64 positions), `classify_peaks` (integer indices), `classify_segments`, `concat_nn`;
+  `ExclusionParams { kubios, premature_factor (0.85), compensatory_factor (0.5), two_stage (true),
+  suspect_move_s (0.030), exclude_inserted_removed (true), physiological_rr_s (None) }`.
+  Artifact passes insert missed / remove extra beats only; one detection pass classifies **ectopic** beats
+  (Kubios `ectopic` flag mapped to the beat between the short and the long interval, or the premature +
+  compensatory pattern) and **suspects** (other flags); optional two-stage detection on a copy with the
+  ectopic beats at their neighbours' midpoint (detection only). Result `BeatExclusion`: output positions,
+  per output beat `BeatFlags` (`BeatClass::{Normal, Ectopic, Suspect, Disagreement, Inserted}`, Kubios /
+  pattern source, suspect stage and required midpoint move, disagreement), per input beat classes (also
+  `Missed`, `Extra`, `PhysiologicalLimit`), `input_to_output`, removed beats, physiological splits,
+  `nn_valid` / `nn_usable` masks; `kept_count`, `usable_count`, `kept_share`, `ectopic_count`,
+  `ectopy_ratio`, `artifact_counts` / `artifact_counts_with` / `artifact_ratio` (`ArtifactCounts`:
+  inserted, removed, physiological, far suspects, caller-given primary/secondary disagreement; ectopic
+  beats excluded), `summary_between` (`ExclusionSummary` for a window), `nn_ms`, `time_domain`, `rmssd`.
+- `time_domain::time_domain_masked(nn_ms, valid)` → `MaskedTimeDomain { time, n_nn, n_pairs }`: RMSSD,
+  SDSD, pNN50, pNN20, CVSD only from successive differences of adjacent valid (and finite) NN intervals;
+  distribution metrics on the valid NN; fewer than `MIN_MASKED_PAIRS` (2) pairs → NaN; all valid →
+  bit-identical to `time_domain`. Also `masked_differences`, `rmssd_masked` (`Option`).
+- `tools/exclusion_reference.py` and `tests/data/kubios_floor_reference.json`,
+  `tests/data/exclusion_reference.json`: synthetic references from the Python research port (floor / alpha
+  variants and the exclusion mode, compared bit for bit); `tests/kubios_floor.rs`, `tests/exclusion.rs`.
+
+### Changed
+- `KubiosParams` has a new public field `threshold_floor_s` (breaking only for code that builds it with all
+  fields and no `..Default::default()`); `KubiosParams` and `ExclusionParams` derive `Serialize` /
+  `Deserialize` with the `serde` feature.
+- The correction APIs (`fix_peaks*`, `fix_positions_with*`, `detect_artifacts*`) are unchanged; NeuroKit2
+  Kubios fixtures still 26/26 identical.
+
 ## [0.5.0] - unreleased
 
 ### Added

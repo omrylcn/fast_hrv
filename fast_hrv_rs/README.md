@@ -7,7 +7,8 @@ Fast, dependency-light **heart rate variability (HRV)** analysis from ECG, in Ru
   Elgendi two-moving-average detector), sub-sample R-peak refinement, a dual-detector API with bSQI,
   windowed processing of long recordings and a **streaming** detector with exactly the same output,
   Kubios artifact correction (NeuroKit2-equivalent; per-beat changed/inserted/removed result, also on sub-sample positions),
-  gap-aware RR intervals
+  an **exclusion mode** as the alternative to correction (ectopic / suspect beat classes, NN validity mask,
+  artifact ratio, RMSSD from adjacent valid NN pairs), gap-aware RR intervals
 - **Signal quality (`sqi`):** absolute indices: flat line, saturation, kSQI, pSQI, basSQI (Zhao & Zhang 2018),
   bSQI (detector agreement), template correlation, RR plausibility, zhao2018 fusion; plus the relative
   per-beat `compute_quality` (NeuroKit2 averageQRS)
@@ -162,6 +163,95 @@ let rri = fixed.rri_ms(512.0);              // corrected sub-sample RR (ms)
 let gate_ok = fixed.changed_ratio() <= 0.02;   // e.g. a 60 s window; the threshold is yours
 ```
 
+**Parameters.** `KubiosParams` defaults are the published values (`alpha` 5.2, `c1` 0.13, `c2` 0.17,
+91-beat quartile window, 11-beat median) and give NeuroKit2 parity. `alpha` scales both time-varying
+thresholds (larger = fewer flags). `threshold_floor_s` (default `0.0` = off, bit-identical to the
+published algorithm) is an absolute lower bound in seconds on both thresholds (Th1 for dRR, Th2 for mRR):
+on very regular, low-HRV series the quartile thresholds shrink to a few milliseconds and small fiducial
+jitter gets flagged and moved; a floor stops that. Th2 is also the missed/extra tolerance, which the floor
+widens too.
+
+```rust
+let p = fast_hrv::KubiosParams { alpha: 6.0, threshold_floor_s: 0.040, ..Default::default() };
+```
+
+## Exclusion instead of correction
+
+Kubios correction moves flagged beats to the midpoint of their neighbours. For a **compensated premature
+beat** that is wrong: the beat is real, and moving it (often together with a neighbour) leaves 50–100 ms
+steps in the NN series. On low-HRV recordings this multiplies RMSSD (synthetic test below: 3 % ectopy, median
+RMSSD error 59 %, 146 % at RMSSD ≈ 10 ms). The exclusion mode classifies beats with the same detection but
+**moves nothing**: the two NN intervals around an ectopic or suspect beat are excluded, and RMSSD uses only
+successive differences of two adjacent valid NN intervals.
+
+```rust
+use fast_hrv::{ExclusionParams, classify_beats};
+
+let out = classify_beats(&positions, 512.0, &ExclusionParams::default(), None)?; // f64 sub-sample positions
+let td = out.time_domain();          // RMSSD / SDSD / pNNx from adjacent valid pairs, MeanNN / SDNN on valid NN
+let rmssd = out.rmssd();             // Option<f64>: None with < 2 valid pairs
+let kept = out.kept_count();         // valid NN; also usable_count(), kept_share()
+let art = out.artifact_ratio();      // artifact events / beats (ectopic beats not counted)
+let ect = out.ectopy_ratio();        // ectopic beats / beats (record it; not an artifact)
+let w = out.summary_between(t0, t1); // the same counts for one window (positions in [t0, t1))
+```
+
+How it works (`exclusion` module docs have the details):
+
+1. **Artifact passes:** Kubios with only the missed (insert at the midpoint) and extra (remove) corrections,
+   iterated; ectopic and long/short flags never move a beat.
+2. **Detection:** a beat is **ectopic** if the Kubios `ectopic` flag maps to it (the beat between the short
+   and the long interval) or if it matches the premature + compensatory pattern
+   `RR[b] ≤ 0.85·m` and `RR[b+1] − m ≥ 0.5·(m − RR[b])` (`m` = centred 11-beat median RR; both factors are
+   parameters). Every other flag makes its beat a **suspect** (long/short or residual missed/extra).
+3. **Two-stage** (default on): detection runs again on a copy with each ectopic beat at its neighbours'
+   midpoint, so the ectopic dRR no longer inflate the thresholds; flags away from the ectopic beats become
+   suspects. The copy is only used for detection.
+4. **NN mask:** an interval is invalid if it is adjacent to an ectopic, suspect or caller-marked
+   disagreement beat, touches an inserted beat, spans a removed beat (`exclude_inserted_removed`, default on)
+   or crosses a physiological split (`physiological_rr_s`, default off). Gap-free segments are processed
+   separately (`classify_segments`, `concat_nn`).
+
+Per beat: `out.beats[j]` (output beats: `Normal`, `Ectopic`, `Suspect`, `Disagreement`, `Inserted`, with
+the Kubios / pattern source, the suspect stage and the midpoint move a suspect would need) and
+`out.input_classes[i]` (input beats: also `Missed` = a beat was missing after it, `Extra`,
+`PhysiologicalLimit`). The **artifact ratio** counts inserted, removed, physiological events, caller-given
+primary/secondary disagreements (optional `&[bool]` per input beat) and suspects whose midpoint move
+exceeds `suspect_move_s` (default 30 ms); ectopic beats are excluded from it. `classify_peaks` takes integer
+indices. `time_domain_masked(nn_ms, valid)` works on any NN series with a validity mask (a `NaN` entry also
+breaks the series); with every interval valid it equals `time_domain` bit for bit.
+
+Accuracy on synthetic series (300 beats, RMSSD ≈ 10 / 20 / 40 ms, `tests/exclusion.rs`):
+
+| Injected | Exclusion (two-stage) RMSSD error | Kubios interpolation RMSSD error |
+|---|---|---|
+| 3 % ectopy + 1 % missed/extra/jitter, 60 series | median 1.0 %, max 4.5 % | median 59 %, p90 150 % |
+| 8 % ectopy + 2 % artifacts, 60 series | median 1.7 %, p90 6.1 % (single-stage: median 143 %) | — |
+
+At 8 % ectopy single-stage detection is blind to most extra beats and jitter (acted on 219/360 artifacts;
+two-stage 336/360). With Kubios flags only (`premature_factor = 0`) single-stage excludes 827/1440 ectopic
+beats, two-stage 1175/1440.
+
+> **Example only — product-side settings, not library defaults.** One product measured on its own data
+> (single subject, wearable ECG) and chose: `KubiosParams { alpha: 6.0, ..Default::default() }` (c1/c2
+> default, no threshold floor), two-stage exclusion, `suspect_move_s = 0.030`, primary/secondary
+> disagreement (> 50 ms) passed as `disagreement`, physiological limits `(0.3, 2.0)`; per 60 s window:
+> artifact ratio ≤ 2 %, ≥ 40 kept NN and kept share ≥ 80 %, residual check on the kept NN (none more than
+> 30 % from the window median); per 300 s: ≥ 200 kept NN; ectopy ratio recorded, not gated. These are that
+> product's thresholds; validate your own.
+
+```rust
+// the example settings above, in code
+let params = fast_hrv::ExclusionParams {
+    kubios: fast_hrv::KubiosParams { alpha: 6.0, ..Default::default() },
+    physiological_rr_s: Some((0.3, 2.0)),
+    ..Default::default()
+};
+let out = fast_hrv::classify_beats(&positions, 512.0, &params, Some(&disagreement))?;
+let w = out.summary_between(t_end - 60.0 * 512.0, t_end);
+let accept = w.artifact_ratio() <= 0.02 && w.kept_nn >= 40 && w.kept_share() >= 0.80;
+```
+
 ## Gaps
 
 `gaps::split_at_gaps` / `rri_with_gaps` take R-peak sample indices plus `Gap { start, end }` markers
@@ -198,13 +288,15 @@ SciPy 1.18.1, NumPy 2.5.5, pandas 3.1.1.
 | Elgendi 8–20 Hz filter (5 simulated 30 s signals: clean, noisy, powerline + baseline, 140 bpm, inverted low amplitude) | `nk.ecg_clean(method="elgendi2010")` | ≤ 6.4e-14 relative |
 | Elgendi peaks before refinement, same signals | `nk.ecg_findpeaks(method="elgendi2010")` / `"elgendi2013"` | 201/201 and 202/202 identical (default config = elgendi2013 peaks as well) |
 | Kubios detection and correction (26 series with injected ectopic/missed/extra/long-short beats, 30–350 beats) | `nk.signal_fixpeaks(method="Kubios")` | 26/26 identical |
+| Kubios with `alpha` 5.2 / 6 and `threshold_floor_s` 0 / 30 / 40 / 50 ms on sub-sample positions (11 synthetic series, 3282 beats) | Python research port of fast-hrv Kubios (`tools/exclusion_reference.py`) | 55/55 identical (flags and corrected positions, bit for bit) |
+| Exclusion mode (single / two-stage, with / without disagreement, 3 parameter sets, same series) | Python research reference (`tools/exclusion_reference.py`) | 132/132 identical (positions, classes, excluded NN) |
 | MeanNN, SDNN, RMSSD, SDSD, Median, MAD, IQR, Min, Max, CVNN, CVSD, HTI, SD1, SD2, SD1/SD2, CSI, CVI, SampEn, ApEn, GI, PI, SD1d/a, C1d/a | `nk.hrv_time` / `hrv_nonlinear` (same R-peaks) | ≤ 3.3e-14 relative |
 | pNN50 / pNN20 | NeuroKit divides by the number of RR intervals, fast-hrv by the number of differences (Task Force) | identical after rescaling |
 | LF, HF, LF/HF, LFnu (records ≥ 5 min) | `nk.hrv_frequency(normalize=False)` | ≤ 24 % observed, test tolerance 30 % (different interpolation and Welch settings) |
 | VLF, TINN, DFA α1/α2 | — | not comparable (different definitions; see `tests/neurokit_parity.rs`) |
 
 Regenerate the references with `python tools/neurokit_reference.py` (and `filter_reference.py`,
-`sqi_reference.py`); the parity tests fail if a reference file is missing (`FAST_HRV_SKIP_PARITY=1` skips them).
+`sqi_reference.py`, `exclusion_reference.py`); the parity tests fail if a reference file is missing (`FAST_HRV_SKIP_PARITY=1` skips them).
 
 ## Benchmark
 
