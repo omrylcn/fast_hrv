@@ -29,6 +29,7 @@ pub mod frequency;
 pub mod hrv;
 pub mod peaks;
 pub mod report;
+pub mod sqi;
 pub mod time_domain;
 
 #[cfg(feature = "simd")]
