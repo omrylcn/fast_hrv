@@ -18,7 +18,10 @@
 //! different segments re-introduces successive differences across a gap.
 
 use crate::error::HrvError;
-use crate::peaks::{Artifacts, Corrections, KubiosOutput, KubiosParams, fix_peaks_with};
+use crate::peaks::{
+    Artifacts, Corrections, KubiosOutput, KubiosParams, KubiosPositions, fix_peaks_with,
+    fix_positions_with,
+};
 
 /// A gap: the half-open interval `[start, end)` in samples (same clock as the peaks) with no valid
 /// data. Peaks inside a gap are discarded. A zero-length gap (`start == end`) is a discontinuity
@@ -167,6 +170,21 @@ pub fn fix_peaks_segmented(
     segments
         .iter()
         .map(|s| fix_peaks_with(s, sampling_rate, params))
+        .collect()
+}
+
+/// [`fix_peaks_segmented`] for sub-sample positions ([`fix_positions_with`], no rounding).
+///
+/// Segments of positions can come from [`split_peak_times`], which works on any unit: positions in
+/// samples with gaps and `max_rr` in samples, or times in seconds with `sampling_rate = 1.0`.
+pub fn fix_positions_segmented(
+    segments: &[Vec<f64>],
+    sampling_rate: f64,
+    params: &KubiosParams,
+) -> Result<Vec<KubiosPositions>, HrvError> {
+    segments
+        .iter()
+        .map(|s| fix_positions_with(s, sampling_rate, params))
         .collect()
 }
 
@@ -340,6 +358,15 @@ mod tests {
         assert_eq!(overall_changed_ratio(&fixed), counts[0] as f64 / n as f64);
         assert!(total_artifacts(&fixed) >= counts[0]);
         assert!(overall_changed_ratio::<KubiosOutput>(&[]).is_nan());
+
+        // the same segments as sub-sample positions
+        let segs: Vec<Vec<f64>> = [a, jitter(100)]
+            .iter()
+            .map(|s| s.iter().map(|&p| p as f64 + 0.25).collect())
+            .collect();
+        let fp = fix_positions_segmented(&segs, fs, &KubiosParams::default()).unwrap();
+        assert_eq!(segment_changed_counts(&fp), counts);
+        assert_eq!(total_changed(&fp), total_changed(&fixed));
     }
 
     #[test]

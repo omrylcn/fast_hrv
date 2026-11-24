@@ -365,6 +365,59 @@ fn sub_sample_peaks_reduce_rmssd_bias() {
     }
 }
 
+#[test]
+fn refined_positions_through_kubios_keep_sub_sample_precision() {
+    // refined peaks -> Kubios on f64 positions -> RR, with one missed beat
+    use fast_hrv::{BeatStatus, KubiosParams, fix_peaks_with};
+    let s = synth_ecg(FS, 300.0, 21, 0.01, 1.0);
+    let c = clean(&s.signal);
+    let cands: Vec<usize> = s.r_true.iter().map(|&r| r.round() as usize + 9).collect();
+    let mut r = refine_peaks(&c, FS, &cands, &RefineConfig::default()).unwrap();
+    let k = r.positions.len() / 2;
+    let dropped = r.positions.remove(k);
+    r.indices.remove(k);
+    let refined = r;
+    let params = KubiosParams::default();
+
+    let out = refined.fix_kubios(FS, &params).unwrap();
+    let cor = &out.corrections;
+    assert_eq!(cor.inserted_count(), 1, "{:?}", out.passes);
+    assert_eq!(cor.status[k], BeatStatus::Inserted);
+    assert!((out.positions[k] - dropped).abs() < 0.1 * FS);
+    // every unchanged beat keeps its refined position bit for bit
+    for (i, o) in cor.input_to_output.iter().enumerate() {
+        let j = o.unwrap();
+        if cor.status[j] == BeatStatus::Unchanged {
+            assert_eq!(out.positions[j].to_bits(), refined.positions[i].to_bits());
+        }
+    }
+    // integer path on rounded positions: inserts the same beat (rounding the RR can push other
+    // borderline beats over a threshold, so the counts may differ)
+    let rounded: Vec<usize> = refined
+        .positions
+        .iter()
+        .map(|p| p.round() as usize)
+        .collect();
+    let int = fix_peaks_with(&rounded, FS, &params).unwrap();
+    assert_eq!(int.corrections.status[k], BeatStatus::Inserted);
+    eprintln!(
+        "changed beats: sub-sample {} ({:?}), rounded {} ({:?})",
+        out.changed_count(),
+        out.passes,
+        int.changed_count(),
+        int.passes
+    );
+    // RMSSD of the corrected series: sub-sample closer to the truth than the rounded path
+    let true_rmssd = rmssd(&rri_from_positions(&s.r_true, FS));
+    let sub = rmssd(&out.rri_ms(FS));
+    let rnd = rmssd(&fast_hrv::rri_from_peaks(&int.peaks, FS as u32));
+    eprintln!(
+        "RMSSD true {true_rmssd:.3} ms, corrected sub-sample {sub:.3} ms, corrected rounded {rnd:.3} ms; changed ratio {:.4}",
+        out.changed_ratio()
+    );
+    assert!((sub - true_rmssd).abs() < (rnd - true_rmssd).abs());
+}
+
 // ---------------------------------------------------------------------------------------------
 // Dual-detector API
 // ---------------------------------------------------------------------------------------------

@@ -443,6 +443,17 @@ impl RefinedPeaks {
     pub fn times_s(&self, fs: f64) -> Vec<f64> {
         self.positions.iter().map(|p| p / fs).collect()
     }
+
+    /// Kubios artifact correction of the sub-sample positions without rounding them
+    /// ([`crate::peaks::fix_positions_with`]); unchanged beats keep their refined positions. RR of the
+    /// result: [`crate::peaks::KubiosPositions::rri_ms`]. One call = one continuous segment.
+    pub fn fix_kubios(
+        &self,
+        fs: f64,
+        params: &crate::peaks::KubiosParams,
+    ) -> Result<crate::peaks::KubiosPositions, HrvError> {
+        crate::peaks::fix_positions_with(&self.positions, fs, params)
+    }
 }
 
 /// Vertex offset of the parabola through `(−1, y_m1)`, `(0, y0)`, `(1, y_p1)`:

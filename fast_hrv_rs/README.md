@@ -6,7 +6,7 @@ Fast, dependency-light **heart rate variability (HRV)** analysis from ECG, in Ru
   a causal **streaming** filter for packet-by-packet processing, R-peak detection (NeuroKit2 method and
   Elgendi two-moving-average detector), sub-sample R-peak refinement, a dual-detector API with bSQI,
   windowed processing of long recordings and a **streaming** detector with exactly the same output,
-  Kubios artifact correction (NeuroKit2-equivalent),
+  Kubios artifact correction (NeuroKit2-equivalent; per-beat changed/inserted/removed result, also on sub-sample positions),
   gap-aware RR intervals
 - **Signal quality (`sqi`):** absolute indices: flat line, saturation, kSQI, pSQI, basSQI (Zhao & Zhang 2018),
   bSQI (detector agreement), template correlation, RR plausibility, zhao2018 fusion; plus the relative
@@ -142,6 +142,24 @@ comparing the output with the input.
 let out = fast_hrv::fix_peaks_with(&peaks, 512.0, &fast_hrv::KubiosParams::default())?;
 let ratio = out.changed_ratio();            // share of output beats actually changed
 let removed = out.corrections.removed_count();
+```
+
+**Sub-sample positions.** `fix_positions_with(positions, fs, params)` runs the same algorithm on `f64`
+positions (RR from the positions), so refined peaks need not be rounded: unchanged beats keep their
+sub-sample positions bit for bit, inserted and moved beats go to the exact midpoint of their neighbours,
+and the result (`KubiosPositions`) carries the same `corrections`. With `KubiosMidpoint::Floor`
+(`fix_positions_with_midpoint`) integer-valued positions give results bit-identical to `fix_peaks_with`
+(and NeuroKit2). Shortcuts: `RefinedPeaks::fix_kubios`, `stream::fix_stream_peaks` (one gap-free segment
+of `StreamPeak`s), `gaps::fix_positions_segmented`, and `KubiosPositions::rri_ms(fs)` for the RR.
+Integer RR series contain exact ties at some decision boundaries, so a sub-sample series can differ from
+its rounded version in a few borderline flags (6 of 26 fixture series with ±0.45-sample offsets, same total
+number of changes).
+
+```rust
+let r = refine_peaks(&clean, 512.0, &cand, &RefineConfig::default())?;
+let fixed = r.fix_kubios(512.0, &fast_hrv::KubiosParams::default())?;
+let rri = fixed.rri_ms(512.0);              // corrected sub-sample RR (ms)
+let gate_ok = fixed.changed_ratio() <= 0.02;   // e.g. a 60 s window; the threshold is yours
 ```
 
 ## Gaps

@@ -86,6 +86,24 @@ pub struct StreamPeak {
     pub position: f64,
 }
 
+/// Sub-sample positions of stream peaks (absolute samples), e.g. for
+/// [`crate::rri_from_positions`] or [`crate::peaks::fix_positions_with`].
+pub fn peak_positions(peaks: &[StreamPeak]) -> Vec<f64> {
+    peaks.iter().map(|p| p.position).collect()
+}
+
+/// Kubios artifact correction of one gap-free run of stream peaks on their sub-sample positions
+/// (no rounding; unchanged beats keep their positions). `RR` of the result:
+/// [`crate::peaks::KubiosPositions::rri_ms`]. Call it once per segment (between `reset_at` calls),
+/// never across a gap.
+pub fn fix_stream_peaks(
+    peaks: &[StreamPeak],
+    fs: f64,
+    params: &crate::peaks::KubiosParams,
+) -> Result<crate::peaks::KubiosPositions, HrvError> {
+    crate::peaks::fix_positions_with(&peak_positions(peaks), fs, params)
+}
+
 /// Peaks emitted by one or more [`StreamDetector`] calls (appended, in increasing position).
 #[derive(Debug, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -714,5 +732,27 @@ mod tests {
         }
         assert!(!out.primary.is_empty());
         assert!(bytes < 64 * 1024, "{bytes}");
+    }
+
+    #[test]
+    fn stream_peaks_through_kubios() {
+        let peaks: Vec<StreamPeak> = [100u64, 510, 1330, 1740, 2150, 2560, 2970, 3380, 3790]
+            .iter()
+            .map(|&i| StreamPeak {
+                index: i + 1_000_000,
+                position: (i + 1_000_000) as f64 + 0.25,
+            })
+            .collect();
+        let pos = peak_positions(&peaks);
+        assert_eq!(pos[0], 1_000_100.25);
+        let params = crate::peaks::KubiosParams::default();
+        let out = fix_stream_peaks(&peaks, 512.0, &params).unwrap();
+        assert_eq!(
+            out,
+            crate::peaks::fix_positions_with(&pos, 512.0, &params).unwrap()
+        );
+        assert_eq!(out.changed_count(), 1);
+        assert_eq!(out.positions[2], pos[1] + (pos[3] - pos[1]) / 2.0);
+        assert_eq!(out.rri_ms(512.0).len(), 8);
     }
 }

@@ -19,7 +19,10 @@
 
 use std::collections::BTreeMap;
 
-use fast_hrv::peaks::{KubiosParams, detect_artifacts, find_peaks_default, fix_peaks_with};
+use fast_hrv::peaks::{
+    KubiosMidpoint, KubiosParams, detect_artifacts, detect_artifacts_positions, find_peaks_default,
+    fix_peaks_with, fix_positions_with, fix_positions_with_midpoint,
+};
 use fast_hrv::{HrvReport, ecg_clean, hrv, rri_from_peaks};
 use serde_json::Value;
 
@@ -413,4 +416,180 @@ fn kubios_changed_beats_vs_flags() {
         beats += out.peaks.len();
     }
     eprintln!("total: {beats} output beats, {flags} flags, {changed} changed + {removed} removed");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Kubios on f64 positions (`fix_positions_with`)
+// ---------------------------------------------------------------------------------------------
+
+/// Deterministic sub-sample offsets in [-0.45, 0.45] (LCG; no RNG dependency).
+fn offsets(n: usize, seed: u64) -> Vec<f64> {
+    let mut s = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    (0..n)
+        .map(|_| {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 11) as f64 / (1u64 << 53) as f64 - 0.5) * 0.9
+        })
+        .collect()
+}
+
+fn changed_set(c: &fast_hrv::Corrections) -> Vec<usize> {
+    (0..c.n_output())
+        .filter(|&j| c.status[j] != fast_hrv::BeatStatus::Unchanged)
+        .collect()
+}
+
+/// Integer-valued positions: `KubiosMidpoint::Floor` is bit-identical to `fix_peaks_with` (and so
+/// to NeuroKit2); with the default exact midpoint the per-beat result is the same on these fixtures
+/// and corrected beats stay within one sample (0.5 per midpoint; adjacent moved beats can add up).
+#[test]
+fn kubios_positions_integer_valued_match_integer_path() {
+    let Some(r) = load("neurokit_kubios.json") else {
+        return;
+    };
+    let params = KubiosParams::default();
+    let mut max_dev: f64 = 0.0;
+    for case in r["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let fs = case["sampling_rate"].as_f64().unwrap();
+        let peaks = usizes(&case["peaks"]);
+        let nk_fixed: Vec<f64> = usizes(&case["fixed"]).iter().map(|&p| p as f64).collect();
+        let pos: Vec<f64> = peaks.iter().map(|&p| p as f64).collect();
+        let int = fix_peaks_with(&peaks, fs, &params).unwrap();
+
+        assert_eq!(
+            detect_artifacts_positions(&pos, fs, &params),
+            detect_artifacts(&peaks, fs, &params),
+            "{name}"
+        );
+        let floor = fix_positions_with_midpoint(&pos, fs, &params, KubiosMidpoint::Floor).unwrap();
+        assert_eq!(floor.positions, nk_fixed, "{name}: Floor vs NeuroKit2");
+        let int_pos: Vec<f64> = int.peaks.iter().map(|&p| p as f64).collect();
+        assert!(
+            floor
+                .positions
+                .iter()
+                .zip(&int_pos)
+                .all(|(a, b)| a.to_bits() == b.to_bits()),
+            "{name}"
+        );
+        assert_eq!(floor.artifacts, int.artifacts, "{name}");
+        assert_eq!(floor.passes, int.passes, "{name}");
+        assert_eq!(floor.corrections, int.corrections, "{name}");
+
+        let exact = fix_positions_with(&pos, fs, &params).unwrap();
+        assert_eq!(exact.corrections, int.corrections, "{name}: exact midpoint");
+        assert_eq!(exact.passes, int.passes, "{name}: exact midpoint");
+        for (j, (&a, &b)) in exact.positions.iter().zip(&int_pos).enumerate() {
+            if exact.corrections.status[j] == fast_hrv::BeatStatus::Unchanged {
+                assert_eq!(a.to_bits(), b.to_bits(), "{name}");
+            } else {
+                assert!((a - b).abs() < 1.0, "{name}: beat {j}: {a} vs {b}");
+                max_dev = max_dev.max((a - b).abs());
+            }
+        }
+    }
+    eprintln!("exact vs floor midpoint: largest difference {max_dev} samples");
+}
+
+/// A constant dyadic sub-sample offset keeps every RR bit-identical, so the result must be the
+/// integer-valued result shifted by the offset.
+#[test]
+fn kubios_positions_constant_subsample_offset() {
+    let Some(r) = load("neurokit_kubios.json") else {
+        return;
+    };
+    let params = KubiosParams::default();
+    for case in r["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let fs = case["sampling_rate"].as_f64().unwrap();
+        let peaks = usizes(&case["peaks"]);
+        let pos: Vec<f64> = peaks.iter().map(|&p| p as f64).collect();
+        let base = fix_positions_with(&pos, fs, &params).unwrap();
+        for delta in [0.25, -0.375, 0.4375] {
+            let sub: Vec<f64> = pos.iter().map(|p| p + delta).collect();
+            let out = fix_positions_with(&sub, fs, &params).unwrap();
+            assert_eq!(out.corrections, base.corrections, "{name} {delta}");
+            assert_eq!(out.passes, base.passes, "{name} {delta}");
+            let shifted: Vec<f64> = base.positions.iter().map(|p| p + delta).collect();
+            assert_eq!(out.positions, shifted, "{name} {delta}");
+        }
+    }
+}
+
+/// Per-beat sub-sample offsets (|δ| ≤ 0.45 samples, as from parabolic refinement) against the
+/// integer path on the rounded positions (= the NeuroKit2 fixture input).
+///
+/// Unchanged beats must keep their sub-sample input positions bit for bit. The changed beats agree
+/// with the integer path except where a Kubios decision sits on a boundary that rounding moves:
+/// integer RR series contain exact ties (e.g. `|dRR[i+1]| == |dRR[i+2]|` in the long/short candidate
+/// rule), which any sub-sample offset breaks (in `none_70` an offset of 1e-9 samples already adds a
+/// long/short candidate). Those cases are reported and bounded, not hidden.
+#[test]
+fn kubios_positions_subsample_vs_rounded() {
+    let Some(r) = load("neurokit_kubios.json") else {
+        return;
+    };
+    let params = KubiosParams::default();
+    let cases = r["cases"].as_array().unwrap();
+    let mut same = 0;
+    let mut differing = Vec::new();
+    let (mut sum_int, mut sum_sub) = (0usize, 0usize);
+    for (ci, case) in cases.iter().enumerate() {
+        let name = case["name"].as_str().unwrap();
+        let fs = case["sampling_rate"].as_f64().unwrap();
+        let peaks = usizes(&case["peaks"]);
+        let sub: Vec<f64> = peaks
+            .iter()
+            .zip(offsets(peaks.len(), ci as u64))
+            .map(|(&p, o)| p as f64 + o)
+            .collect();
+        let rounded: Vec<usize> = sub.iter().map(|p| p.round() as usize).collect();
+        assert_eq!(rounded, peaks);
+        let int = fix_peaks_with(&rounded, fs, &params).unwrap();
+        let out = fix_positions_with(&sub, fs, &params).unwrap();
+        let c = &out.corrections;
+
+        // unchanged beats keep their original sub-sample positions
+        for (i, o) in c.input_to_output.iter().enumerate() {
+            if let Some(j) = *o {
+                if c.status[j] == fast_hrv::BeatStatus::Unchanged {
+                    assert_eq!(out.positions[j].to_bits(), sub[i].to_bits(), "{name}");
+                } else {
+                    assert_ne!(out.positions[j], sub[i], "{name}");
+                }
+            }
+        }
+        let (a, b) = (changed_set(&int.corrections), changed_set(c));
+        sum_int += a.len() + int.corrections.removed_count();
+        sum_sub += b.len() + c.removed_count();
+        if int.corrections == *c {
+            same += 1;
+            // same beats changed: corrected positions within a sample of the integer result
+            for &j in &b {
+                assert!(
+                    (out.positions[j] - int.peaks[j] as f64).abs() < 1.0,
+                    "{name}"
+                );
+            }
+        } else {
+            let sym = a.iter().filter(|j| !b.contains(j)).count()
+                + b.iter().filter(|j| !a.contains(j)).count();
+            assert!(sym <= 2, "{name}: {a:?} vs {b:?}");
+            assert_eq!(c.removed_count(), int.corrections.removed_count(), "{name}");
+            differing.push(format!("{name}: integer {a:?}, sub-sample {b:?}"));
+        }
+    }
+    eprintln!(
+        "sub-sample vs rounded: identical per-beat result {same}/{}; changed+removed {sum_sub} vs {sum_int}",
+        cases.len()
+    );
+    for d in &differing {
+        eprintln!("  {d}");
+    }
+    assert!(same >= cases.len() - 6, "{same}/{}", cases.len());
 }

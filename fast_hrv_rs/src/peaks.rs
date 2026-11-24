@@ -615,6 +615,55 @@ impl AsRef<Corrections> for KubiosOutput {
     }
 }
 
+/// Where [`fix_positions_with_midpoint`] places inserted (missed) and moved (ectopic, long/short)
+/// beats: at the midpoint of the neighbours, `prev + (next − prev) / 2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KubiosMidpoint {
+    /// Exact midpoint, no rounding (the default of [`fix_positions_with`]).
+    #[default]
+    Exact,
+    /// `prev + floor((next − prev) / 2)`, the integer rule of [`fix_peaks_with`] and NeuroKit2.
+    /// On integer-valued positions the result is bit-identical to [`fix_peaks_with`].
+    Floor,
+}
+
+/// Result of [`fix_positions_with`]: like [`KubiosOutput`] but with `f64` sample positions.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct KubiosPositions {
+    /// Corrected positions (samples, or whatever unit the input was in). Unchanged beats keep their
+    /// input value bit for bit.
+    pub positions: Vec<f64>,
+    /// Artifact flags of all applied passes (flags, not corrected beats).
+    pub artifacts: Artifacts,
+    /// Artifacts of each applied pass.
+    pub passes: Vec<Artifacts>,
+    /// Per-beat result (unchanged / moved / inserted, removed count, input → output mapping).
+    pub corrections: Corrections,
+}
+
+impl KubiosPositions {
+    /// Output beats actually changed (moved + inserted); see [`Corrections::changed_count`].
+    pub fn changed_count(&self) -> usize {
+        self.corrections.changed_count()
+    }
+
+    /// Share of output beats actually changed; see [`Corrections::changed_ratio`].
+    pub fn changed_ratio(&self) -> f64 {
+        self.corrections.changed_ratio()
+    }
+
+    /// NN intervals (ms) of the corrected positions: [`crate::report::rri_from_positions`].
+    pub fn rri_ms(&self, sampling_rate: f64) -> Vec<f64> {
+        crate::report::rri_from_positions(&self.positions, sampling_rate)
+    }
+}
+
+impl AsRef<Corrections> for KubiosPositions {
+    fn as_ref(&self) -> &Corrections {
+        &self.corrections
+    }
+}
+
 /// NumPy's pairwise summation (`np.sum` / `np.mean` on float64), for bit-level parity.
 pub(crate) fn numpy_sum(x: &[f64]) -> f64 {
     let n = x.len();
@@ -853,7 +902,8 @@ fn classify_artifacts(
     artifacts
 }
 
-/// Peak position type of the generic Kubios core (integer sample indices). Only RR (`as_f64` differences) and ordering are needed; the midpoint rule is passed
+/// Peak position type of the generic Kubios core: integer sample indices (`usize`) or `f64`
+/// positions. Only RR (`as_f64` differences) and ordering are needed; the midpoint rule is passed
 /// separately.
 trait PeakPos: Copy {
     fn as_f64(self) -> f64;
@@ -871,6 +921,17 @@ impl PeakPos for usize {
     }
 }
 
+impl PeakPos for f64 {
+    #[inline]
+    fn as_f64(self) -> f64 {
+        self
+    }
+    #[inline]
+    fn cmp_pos(&self, other: &Self) -> std::cmp::Ordering {
+        self.total_cmp(other)
+    }
+}
+
 /// One Kubios detection pass over strictly increasing `peaks` (NeuroKit2 `_find_artifacts`).
 ///
 /// Rolling quartiles and median follow pandas `rolling(..., center=True, min_periods=1)` exactly
@@ -878,6 +939,16 @@ impl PeakPos for usize {
 /// behave like NeuroKit2.
 pub fn detect_artifacts(peaks: &[usize], sampling_rate: f64, params: &KubiosParams) -> Artifacts {
     detect_core(peaks, sampling_rate, params)
+}
+
+/// [`detect_artifacts`] on strictly increasing `f64` positions (samples; RR = difference / fs).
+/// On integer-valued positions the result is identical to [`detect_artifacts`].
+pub fn detect_artifacts_positions(
+    positions: &[f64],
+    sampling_rate: f64,
+    params: &KubiosParams,
+) -> Artifacts {
+    detect_core(positions, sampling_rate, params)
 }
 
 fn detect_core<T: PeakPos>(peaks: &[T], sampling_rate: f64, params: &KubiosParams) -> Artifacts {
@@ -1136,7 +1207,8 @@ fn check_strictly_increasing(peaks: &[usize]) -> Result<(), HrvError> {
 /// the per-beat [`Corrections`]. Gate on [`KubiosOutput::changed_ratio`] (beats actually changed),
 /// not on `artifacts.total_count()` (flags over all passes).
 /// Note: one call treats `peaks` as one continuous recording; for recordings with gaps use
-/// [`crate::gaps::fix_peaks_segmented`] so that no beats are inserted into a gap.
+/// [`crate::gaps::fix_peaks_segmented`] so that no beats are inserted into a gap. For sub-sample
+/// positions use [`fix_positions_with`].
 pub fn fix_peaks_with(
     peaks: &[usize],
     sampling_rate: f64,
@@ -1152,6 +1224,63 @@ pub fn fix_peaks_with(
         });
     Ok(KubiosOutput {
         peaks,
+        artifacts,
+        passes,
+        corrections,
+    })
+}
+
+/// Kubios correction on sub-sample `f64` positions (e.g. [`crate::detect::RefinedPeaks::positions`]
+/// or [`crate::stream::StreamPeak::position`]), without rounding them to integers first.
+///
+/// Same Lipponen–Tarvainen algorithm as [`fix_peaks_with`], with RR taken from the positions
+/// (`(p[i] − p[i−1]) / sampling_rate`). Inserted and moved beats are placed at the **exact**
+/// midpoint of their neighbours, `prev + (next − prev) / 2` (the integer path floors it); unchanged
+/// beats keep their input positions bit for bit. Positions must be finite
+/// ([`HrvError::NonFinite`]) and strictly increasing ([`HrvError::UnsortedPeaks`]).
+///
+/// Positions may be in any unit as long as `sampling_rate` converts them to seconds; times in
+/// seconds work with `sampling_rate = 1.0`.
+///
+/// Relation to the integer path: with [`KubiosMidpoint::Floor`]
+/// ([`fix_positions_with_midpoint`]) integer-valued positions give results bit-identical to
+/// [`fix_peaks_with`] (every operation is exact on integers below 2^53). With the default exact
+/// midpoint the first detection pass is identical, and a corrected beat can differ from the integer
+/// path by half a sample.
+pub fn fix_positions_with(
+    positions: &[f64],
+    sampling_rate: f64,
+    params: &KubiosParams,
+) -> Result<KubiosPositions, HrvError> {
+    fix_positions_with_midpoint(positions, sampling_rate, params, KubiosMidpoint::Exact)
+}
+
+/// [`fix_positions_with`] with an explicit placement rule for inserted and moved beats.
+pub fn fix_positions_with_midpoint(
+    positions: &[f64],
+    sampling_rate: f64,
+    params: &KubiosParams,
+    midpoint: KubiosMidpoint,
+) -> Result<KubiosPositions, HrvError> {
+    if positions.iter().any(|p| !p.is_finite()) {
+        return Err(HrvError::NonFinite);
+    }
+    if let Some(i) = positions.windows(2).position(|w| w[1] <= w[0]) {
+        return Err(HrvError::UnsortedPeaks { index: i + 1 });
+    }
+    if !(sampling_rate.is_finite() && sampling_rate > 0.0) {
+        return Err(HrvError::InvalidSamplingRate(sampling_rate));
+    }
+    let (positions, artifacts, passes, corrections) = match midpoint {
+        KubiosMidpoint::Exact => fix_core(positions, sampling_rate, params, |a: f64, b: f64| {
+            a + (b - a) / 2.0
+        }),
+        KubiosMidpoint::Floor => fix_core(positions, sampling_rate, params, |a: f64, b: f64| {
+            a + ((b - a) / 2.0).floor()
+        }),
+    };
+    Ok(KubiosPositions {
+        positions,
         artifacts,
         passes,
         corrections,
@@ -1583,6 +1712,86 @@ mod tests {
         check_corrections(&input, &values, &c);
         // empty
         assert!(Corrections::identity(0).changed_ratio().is_nan());
+    }
+
+    #[test]
+    fn positions_inserted_beat_is_exact_midpoint() {
+        let mut pos: Vec<f64> = [
+            100, 510, 921, 1741, 2150, 2560, 2971, 3380, 3790, 4200, 4611, 5020, 5431,
+        ]
+        .iter()
+        .map(|&p| p as f64)
+        .collect();
+        pos[2] += 0.25;
+        pos[3] += 0.5;
+        let out = fix_positions_with(&pos, 512.0, &KubiosParams::default()).unwrap();
+        let c = &out.corrections;
+        assert_eq!(c.status[3], BeatStatus::Inserted);
+        assert_eq!(c.changed_count(), 1);
+        // 921.25 + (1741.5 − 921.25) / 2 = 1331.375, not rounded
+        assert_eq!(out.positions[3], 1331.375);
+        assert_eq!(out.positions[2], 921.25);
+        assert_eq!(out.positions[4], 1741.5);
+        check_corrections(&pos, &out.positions, c);
+        // the floor rule on the same input
+        let fl = fix_positions_with_midpoint(
+            &pos,
+            512.0,
+            &KubiosParams::default(),
+            KubiosMidpoint::Floor,
+        )
+        .unwrap();
+        assert_eq!(fl.positions[3], 1331.25);
+        assert_eq!(fl.corrections, out.corrections);
+    }
+
+    #[test]
+    fn positions_moved_beat_keeps_neighbours() {
+        let peaks = [100usize, 510, 1330, 1740, 2150, 2560, 2970, 3380, 3790];
+        let pos: Vec<f64> = peaks
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| p as f64 + 0.1 * i as f64 - 0.3)
+            .collect();
+        let out = fix_positions_with(&pos, 512.0, &KubiosParams::default()).unwrap();
+        let int = fix_peaks_with(&peaks, 512.0, &KubiosParams::default()).unwrap();
+        assert_eq!(out.corrections, int.corrections);
+        assert_eq!(out.positions[2], pos[1] + (pos[3] - pos[1]) / 2.0);
+        for j in [0, 1, 3, 4, 5, 6, 7, 8] {
+            assert_eq!(out.positions[j].to_bits(), pos[j].to_bits());
+        }
+        // times in seconds with sampling_rate = 1: same per-beat result
+        let t: Vec<f64> = pos.iter().map(|p| p / 512.0).collect();
+        let ts = fix_positions_with(&t, 1.0, &KubiosParams::default()).unwrap();
+        assert_eq!(ts.corrections, out.corrections);
+        assert!((ts.positions[2] * 512.0 - out.positions[2]).abs() < 1e-6);
+        // RR from the corrected positions
+        assert_eq!(
+            out.rri_ms(512.0),
+            crate::report::rri_from_positions(&out.positions, 512.0)
+        );
+    }
+
+    #[test]
+    fn positions_invalid_and_short_inputs() {
+        let p = KubiosParams::default();
+        assert_eq!(
+            fix_positions_with(&[1.0, f64::NAN, 3.0], 512.0, &p),
+            Err(HrvError::NonFinite)
+        );
+        assert_eq!(
+            fix_positions_with(&[1.0, 3.0, 2.0], 512.0, &p),
+            Err(HrvError::UnsortedPeaks { index: 2 })
+        );
+        assert!(matches!(
+            fix_positions_with(&[1.0, 3.0, 5.0], 0.0, &p),
+            Err(HrvError::InvalidSamplingRate(_))
+        ));
+        let short = fix_positions_with(&[10.5, 400.25], 512.0, &p).unwrap();
+        assert_eq!(short.positions, vec![10.5, 400.25]);
+        assert_eq!(short.corrections, Corrections::identity(2));
+        let empty = fix_positions_with(&[], 512.0, &p).unwrap();
+        assert!(empty.changed_ratio().is_nan());
     }
 
     #[test]

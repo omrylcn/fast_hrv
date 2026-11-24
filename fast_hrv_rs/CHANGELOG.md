@@ -13,6 +13,16 @@ All notable changes to this crate. The format follows [Keep a Changelog](https:/
   / `changed_ratio()` shortcuts. Ratio definition: (moved + inserted) / output beats; removed separately.
 - `gaps::segment_changed_counts`, `total_changed`, `total_removed`, `overall_changed_ratio` (generic over
   `AsRef<Corrections>`).
+- Kubios on sub-sample positions: `fix_positions_with(positions: &[f64], fs, params)` →
+  `KubiosPositions { positions, artifacts, passes, corrections }` (`changed_count`, `changed_ratio`,
+  `rri_ms`). Same algorithm with RR from the `f64` positions; unchanged beats keep their input positions
+  bit for bit; inserted / moved beats at the exact neighbour midpoint. `fix_positions_with_midpoint` with
+  `KubiosMidpoint::{Exact, Floor}`: `Floor` on integer-valued positions is bit-identical to
+  `fix_peaks_with` (tested on the 26 NeuroKit2 fixtures). `detect_artifacts_positions` (one pass).
+- Convenience paths: `RefinedPeaks::fix_kubios`, `stream::peak_positions`, `stream::fix_stream_peaks`,
+  `gaps::fix_positions_segmented`.
+- Tests: per-beat corrections (unit + fixtures), integer-valued / constant-offset / per-beat sub-sample
+  positions against the integer path, refined synthetic ECG with a missed beat through Kubios.
 
 ### Changed
 - Docs: `Artifacts::total_count()` (and `gaps::total_artifacts`) count artifact **flags** over all passes,
