@@ -4,7 +4,8 @@
 //!
 //! - **Sinyal:** SciPy eşdeğeri Butterworth tasarımı ([`filter`]), NeuroKit2 uyumlu sıfır fazlı EKG
 //!   temizleme ve paket paket akış filtresi ([`ecg`]), R tepe tespiti (NeuroKit2 yöntemi; Elgendi,
-//!   alt-örnek inceltme, iki detektörlü bSQI ve uzun kayıtlar için pencereli işleme: [`detect`]), Kubios
+//!   alt-örnek inceltme, iki detektörlü bSQI ve uzun kayıtlar için pencereli işleme: [`detect`]; aynı
+//!   pencereli çıktıyı paket paket veren akış detektörü: [`stream`]), Kubios
 //!   artefakt düzeltme, boşluk farkında RR ([`gaps`]), mutlak sinyal kalitesi indeksleri ([`sqi`]).
 //! - **HRV, 41 metrik:** zaman alanı (17), frekans alanı (9), doğrusal olmayan (9), asimetri (6).
 //!
@@ -37,6 +38,7 @@ pub mod hrv;
 pub mod peaks;
 pub mod report;
 pub mod sqi;
+pub mod stream;
 pub mod time_domain;
 
 #[cfg(feature = "simd")]
@@ -47,8 +49,8 @@ mod python;
 
 pub use detect::{
     DetectorFilter, DualConfig, DualDetection, ElgendiConfig, Polarity, RefineConfig, RefinedPeaks,
-    WindowConfig, detect_windowed, dual_detect, elgendi_peaks, elgendi_refined_windowed,
-    refine_peaks,
+    WindowConfig, WindowedDual, detect_windowed, dual_detect, dual_detect_windowed, elgendi_peaks,
+    elgendi_refined_windowed, refine_peaks,
 };
 pub use ecg::{
     EcgFilterConfig, EcgResult, EcgStats, EcgStreamFilter, compute_quality, compute_stats,
@@ -68,4 +70,5 @@ pub use report::{
     Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks, rri_from_positions, rri_from_times,
     try_rri_from_peaks, try_rri_from_times,
 };
+pub use stream::{StreamConfig, StreamDetector, StreamPeak, StreamPeaks, StreamWindow};
 pub use time_domain::{TimeDomain, time_domain};

@@ -9,7 +9,9 @@
 //! - [`dual_detect`]: primary (Elgendi + refinement) and secondary (NeuroKit2 method) peaks on the
 //!   same window plus their bSQI. Results only, no quality gate.
 //! - [`detect_windowed`]: long recordings in fixed windows anchored at absolute sample indices,
-//!   detector restarted per window, overlap de-duplicated deterministically.
+//!   detector restarted per window, overlap de-duplicated deterministically;
+//!   [`dual_detect_windowed`] runs both detectors of [`dual_detect`] that way. For live data the
+//!   same output is produced packet by packet by [`crate::stream::StreamDetector`].
 //!
 //! All durations are given in seconds and converted with the sampling rate, so the detector is not
 //! tied to one sampling rate. Functions are stateless: the same input always gives the same peaks.
@@ -767,6 +769,41 @@ pub fn elgendi_refined_windowed(
         let raw = elgendi_peaks(chunk, fs, elgendi)?;
         Ok(refine_peaks(chunk, fs, &raw, refine)?.positions)
     })
+}
+
+/// Output of [`dual_detect_windowed`]: absolute sub-sample positions of both detectors.
+#[derive(Debug, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct WindowedDual {
+    /// Primary peaks ([`DualDetection::primary`] positions per window, de-duplicated). Identical to
+    /// [`elgendi_refined_windowed`] with `dual.elgendi` / `dual.refine`.
+    pub primary: Vec<f64>,
+    /// Secondary peaks ([`DualDetection::secondary`] positions per window, de-duplicated).
+    pub secondary: Vec<f64>,
+}
+
+/// [`detect_windowed`] with both detectors of [`dual_detect`]: one `dual_detect` call per window,
+/// then the primary and the secondary positions are de-duplicated separately with the same rule.
+/// This is the batch reference of [`crate::stream::StreamDetector`].
+pub fn dual_detect_windowed(
+    clean: &[f64],
+    fs: f64,
+    start_sample: u64,
+    window: &WindowConfig,
+    dual: &DualConfig,
+) -> Result<WindowedDual, HrvError> {
+    let mut secondary_per_window: Vec<Vec<f64>> = Vec::new();
+    let primary = detect_windowed(clean, fs, start_sample, window, |chunk| {
+        let d = dual_detect(chunk, fs, dual)?;
+        secondary_per_window.push(d.secondary.positions);
+        Ok(d.primary.positions)
+    })?;
+    // Same windows in the same order: replay the stored secondary results.
+    let mut stored = secondary_per_window.into_iter();
+    let secondary = detect_windowed(clean, fs, start_sample, window, |_| {
+        Ok(stored.next().unwrap_or_default())
+    })?;
+    Ok(WindowedDual { primary, secondary })
 }
 
 // =============================================================================
