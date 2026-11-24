@@ -684,6 +684,20 @@ fn lfilter_ba(b: &[f64], a: &[f64], x: &[f64], zi: &[f64]) -> Vec<f64> {
     }
     let mut z: Vec<f64> = zi.to_vec();
     z.resize(n.saturating_sub(1), 0.0);
+    if a.len() == 1 {
+        // FIR: y = conv(b, x)[..len] + zi (what SciPy's lfilter does for len(a) == 1)
+        return x
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let mut acc = 0.0;
+                for (k, &bk) in bn.iter().enumerate().take(i + 1) {
+                    acc += bk * x[i - k];
+                }
+                acc + z.get(i).copied().unwrap_or(0.0)
+            })
+            .collect();
+    }
     let mut y = Vec::with_capacity(x.len());
     for &xi in x {
         let yi = bn[0] * xi + z.first().copied().unwrap_or(0.0);

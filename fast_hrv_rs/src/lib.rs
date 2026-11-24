@@ -26,6 +26,7 @@ pub mod ecg;
 pub mod error;
 pub mod filter;
 pub mod frequency;
+pub mod gaps;
 pub mod hrv;
 pub mod peaks;
 pub mod report;
@@ -44,9 +45,11 @@ pub use ecg::{
 };
 pub use error::HrvError;
 pub use frequency::{FrequencyDomain, frequency_domain, welch};
+pub use gaps::{Gap, RrSegment, fix_peaks_segmented, rri_with_gaps, split_at_gaps};
 pub use hrv::*;
 pub use peaks::{
-    Artifacts, ecg_peaks, find_peaks, find_peaks_default, fix_peaks, fix_peaks_default,
+    Artifacts, KubiosOutput, KubiosParams, detect_artifacts, ecg_peaks, find_peaks,
+    find_peaks_default, fix_peaks, fix_peaks_default, fix_peaks_with,
 };
-pub use report::{Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks};
+pub use report::{Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks, try_rri_from_peaks};
 pub use time_domain::{TimeDomain, time_domain};

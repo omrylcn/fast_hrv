@@ -35,7 +35,7 @@ pub fn compute_rmssd(rri: &[f64]) -> f64 {
     if rri.len() < 2 {
         return f64::NAN;
     }
-    let n = rri.len() - 1;
+    let n = rri.len().saturating_sub(1);
     let sum_sq: f64 = rri.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
     (sum_sq / n as f64).sqrt()
 }
@@ -93,7 +93,7 @@ pub struct PoincareResult {
 /// Compute Poincaré plot metrics (SD1, SD2, CSI, CVI)
 pub fn compute_poincare(rri: &[f64]) -> PoincareResult {
     let sqrt2 = std::f64::consts::SQRT_2;
-    let n = rri.len() - 1;
+    let n = rri.len().saturating_sub(1);
 
     if n < 2 {
         return PoincareResult {
@@ -147,7 +147,7 @@ pub struct AsymmetryResult {
 /// Compute Heart Rate Asymmetry metrics
 pub fn compute_asymmetry(rri: &[f64]) -> AsymmetryResult {
     let sqrt2 = std::f64::consts::SQRT_2;
-    let n = rri.len() - 1;
+    let n = rri.len().saturating_sub(1);
 
     if n < 2 {
         return AsymmetryResult {

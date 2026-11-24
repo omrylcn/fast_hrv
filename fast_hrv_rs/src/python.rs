@@ -1,6 +1,11 @@
-//! Python bindings for fast_hrv_rs using PyO3
+//! Python bindings using PyO3.
 //!
-//! Build with: maturin develop --release --features python
+//! Build with: `maturin develop --release --features python`, then `import fast_hrv`.
+//! The module name equals the `[lib] name` in Cargo.toml (`fast_hrv`), so the shared library
+//! exports `PyInit_fast_hrv` as Python expects. (Before 0.2.0 the module was declared as
+//! `fast_hrv_rs`, which did not match the library file name and failed to import.)
+//!
+//! Arrays may be non-contiguous (they are copied); negative peak indices raise `ValueError`.
 
 use numpy::{PyArray1, PyReadonlyArray1, ToPyArray};
 use pyo3::prelude::*;
@@ -10,6 +15,18 @@ use crate::{
     compute_rmssd, compute_sampen, ecg_clean, find_peaks_default, fix_peaks_default, mean,
     process_ecg, std_ddof,
 };
+
+/// Convert peak indices from Python, rejecting negative values.
+fn to_indices(a: &PyReadonlyArray1<'_, i64>) -> PyResult<Vec<usize>> {
+    a.as_array()
+        .iter()
+        .map(|&x| {
+            usize::try_from(x).map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err(format!("negative peak index {x}"))
+            })
+        })
+        .collect()
+}
 
 // =============================================================================
 // ECG Processing
@@ -23,7 +40,7 @@ fn py_ecg_clean<'py>(
     signal: PyReadonlyArray1<'py, f64>,
     sampling_rate: u32,
 ) -> Bound<'py, PyArray1<f64>> {
-    let signal = signal.as_slice().unwrap();
+    let signal = &signal.as_array().to_vec();
     let cleaned = ecg_clean(signal, sampling_rate);
     cleaned.to_pyarray_bound(py)
 }
@@ -36,7 +53,7 @@ fn py_find_peaks<'py>(
     signal: PyReadonlyArray1<'py, f64>,
     sampling_rate: u32,
 ) -> Bound<'py, PyArray1<i64>> {
-    let signal = signal.as_slice().unwrap();
+    let signal = &signal.as_array().to_vec();
     let peaks = find_peaks_default(signal, sampling_rate);
     let peaks_i64: Vec<i64> = peaks.into_iter().map(|x| x as i64).collect();
     peaks_i64.to_pyarray_bound(py)
@@ -50,12 +67,7 @@ fn py_fix_peaks<'py>(
     peaks: PyReadonlyArray1<'py, i64>,
     sampling_rate: u32,
 ) -> PyResult<(Bound<'py, PyArray1<i64>>, PyObject)> {
-    let peaks: Vec<usize> = peaks
-        .as_slice()
-        .unwrap()
-        .iter()
-        .map(|&x| x as usize)
-        .collect();
+    let peaks: Vec<usize> = to_indices(&peaks)?;
     let (fixed, artifacts) = fix_peaks_default(&peaks, sampling_rate);
 
     let fixed_i64: Vec<i64> = fixed.into_iter().map(|x| x as i64).collect();
@@ -78,21 +90,16 @@ fn py_compute_quality<'py>(
     ecg_cleaned: PyReadonlyArray1<'py, f64>,
     rpeaks: PyReadonlyArray1<'py, i64>,
     sampling_rate: u32,
-) -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
-    let ecg_cleaned = ecg_cleaned.as_slice().unwrap();
-    let rpeaks: Vec<usize> = rpeaks
-        .as_slice()
-        .unwrap()
-        .iter()
-        .map(|&x| x as usize)
-        .collect();
+) -> PyResult<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let ecg_cleaned = &ecg_cleaned.as_array().to_vec();
+    let rpeaks: Vec<usize> = to_indices(&rpeaks)?;
 
     let (quality, quality_per_beat) = compute_quality(ecg_cleaned, &rpeaks, sampling_rate);
 
-    (
+    Ok((
         quality.to_pyarray_bound(py),
         quality_per_beat.to_pyarray_bound(py),
-    )
+    ))
 }
 
 /// Full ECG processing pipeline
@@ -104,7 +111,7 @@ fn py_process_ecg<'py>(
     sampling_rate: u32,
     correct_artifacts: bool,
 ) -> PyResult<PyObject> {
-    let signal = signal.as_slice().unwrap();
+    let signal = &signal.as_array().to_vec();
     let result = process_ecg(signal, sampling_rate, correct_artifacts);
 
     let dict = pyo3::types::PyDict::new_bound(py);
@@ -149,63 +156,63 @@ fn py_process_ecg<'py>(
 #[pyfunction]
 #[pyo3(name = "rmssd")]
 fn py_rmssd(rr: PyReadonlyArray1<f64>) -> f64 {
-    compute_rmssd(rr.as_slice().unwrap())
+    compute_rmssd(&rr.as_array().to_vec())
 }
 
 /// Compute SDNN (Standard Deviation of NN intervals)
 #[pyfunction]
 #[pyo3(name = "sdnn")]
 fn py_sdnn(rr: PyReadonlyArray1<f64>) -> f64 {
-    std_ddof(rr.as_slice().unwrap(), 1)
+    std_ddof(&rr.as_array().to_vec(), 1)
 }
 
 /// Compute mean of array
 #[pyfunction]
 #[pyo3(name = "mean")]
 fn py_mean(data: PyReadonlyArray1<f64>) -> f64 {
-    mean(data.as_slice().unwrap())
+    mean(&data.as_array().to_vec())
 }
 
 /// Compute standard deviation with ddof
 #[pyfunction]
 #[pyo3(name = "std")]
 fn py_std(data: PyReadonlyArray1<f64>, ddof: usize) -> f64 {
-    std_ddof(data.as_slice().unwrap(), ddof)
+    std_ddof(&data.as_array().to_vec(), ddof)
 }
 
 /// Compute pNN50
 #[pyfunction]
 #[pyo3(name = "pnn50")]
 fn py_pnn50(rr: PyReadonlyArray1<f64>) -> f64 {
-    compute_pnn50(rr.as_slice().unwrap())
+    compute_pnn50(&rr.as_array().to_vec())
 }
 
 /// Compute pNN20
 #[pyfunction]
 #[pyo3(name = "pnn20")]
 fn py_pnn20(rr: PyReadonlyArray1<f64>) -> f64 {
-    compute_pnn20(rr.as_slice().unwrap())
+    compute_pnn20(&rr.as_array().to_vec())
 }
 
 /// Compute Approximate Entropy (ApEn)
 #[pyfunction]
 #[pyo3(name = "apen")]
 fn py_apen(data: PyReadonlyArray1<f64>, m: usize, r: f64) -> f64 {
-    compute_apen(data.as_slice().unwrap(), m, Some(r))
+    compute_apen(&data.as_array().to_vec(), m, Some(r))
 }
 
 /// Compute Sample Entropy (SampEn)
 #[pyfunction]
 #[pyo3(name = "sampen")]
 fn py_sampen(data: PyReadonlyArray1<f64>, m: usize, r: f64) -> f64 {
-    compute_sampen(data.as_slice().unwrap(), m, Some(r))
+    compute_sampen(&data.as_array().to_vec(), m, Some(r))
 }
 
 /// Compute DFA alpha1 (short-term)
 #[pyfunction]
 #[pyo3(name = "dfa_alpha1")]
 fn py_dfa_alpha1(rr: PyReadonlyArray1<f64>) -> f64 {
-    let result = compute_dfa(rr.as_slice().unwrap(), (4, 16), (16, None));
+    let result = compute_dfa(&rr.as_array().to_vec(), (4, 16), (16, None));
     result.alpha1
 }
 
@@ -213,28 +220,28 @@ fn py_dfa_alpha1(rr: PyReadonlyArray1<f64>) -> f64 {
 #[pyfunction]
 #[pyo3(name = "poincare_sd1")]
 fn py_poincare_sd1(rr: PyReadonlyArray1<f64>) -> f64 {
-    compute_poincare(rr.as_slice().unwrap()).sd1
+    compute_poincare(&rr.as_array().to_vec()).sd1
 }
 
 /// Compute Poincaré SD2
 #[pyfunction]
 #[pyo3(name = "poincare_sd2")]
 fn py_poincare_sd2(rr: PyReadonlyArray1<f64>) -> f64 {
-    compute_poincare(rr.as_slice().unwrap()).sd2
+    compute_poincare(&rr.as_array().to_vec()).sd2
 }
 
 /// Compute Poincaré CSI (Cardiac Sympathetic Index)
 #[pyfunction]
 #[pyo3(name = "poincare_csi")]
 fn py_poincare_csi(rr: PyReadonlyArray1<f64>) -> f64 {
-    compute_poincare(rr.as_slice().unwrap()).csi
+    compute_poincare(&rr.as_array().to_vec()).csi
 }
 
 /// Compute all HRV metrics at once
 #[pyfunction]
 #[pyo3(name = "hrv_metrics")]
 fn py_hrv_metrics(py: Python<'_>, rr: PyReadonlyArray1<f64>) -> PyResult<PyObject> {
-    let rr = rr.as_slice().unwrap();
+    let rr = &rr.as_array().to_vec();
 
     let dict = pyo3::types::PyDict::new_bound(py);
 
@@ -269,9 +276,9 @@ fn py_hrv_metrics(py: Python<'_>, rr: PyReadonlyArray1<f64>) -> PyResult<PyObjec
 // Module Definition
 // =============================================================================
 
-/// fast_hrv_rs - Fast HRV analysis in Rust
+/// fast_hrv - Fast HRV analysis in Rust (`import fast_hrv`)
 #[pymodule]
-fn fast_hrv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn fast_hrv(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // ECG functions
     m.add_function(wrap_pyfunction!(py_ecg_clean, m)?)?;
     m.add_function(wrap_pyfunction!(py_find_peaks, m)?)?;

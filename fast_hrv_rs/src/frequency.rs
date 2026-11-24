@@ -193,14 +193,14 @@ fn band_peak(freqs: &[f64], psd: &[f64], (lo, hi): (f64, f64)) -> f64 {
         .iter()
         .zip(psd)
         .filter(|(f, _)| **f >= lo && **f < hi)
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+        .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(f, _)| *f)
         .unwrap_or(f64::NAN)
 }
 
 /// RR aralıklarından (ms) frekans alanı metrikleri. En az ~30 sn veri ve 10 aralık gerekir; azsa NaN.
 pub fn frequency_domain(rri: &[f64]) -> FrequencyDomain {
-    if rri.len() < 10 {
+    if rri.len() < 10 || rri.iter().any(|r| !(r.is_finite() && *r > 0.0)) {
         return FrequencyDomain::nan();
     }
     // Atım zamanları (sn): ilk aralığın sonu t0

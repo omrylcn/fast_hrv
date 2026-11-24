@@ -305,10 +305,11 @@ pub fn compute_quality(
     // Calculate window size based on heart rate
     let rr: Vec<f64> = rpeaks
         .windows(2)
-        .map(|w| (w[1] - w[0]) as f64 / sampling_rate as f64)
+        .map(|w| (w[1] as f64 - w[0] as f64) / sampling_rate as f64)
         .collect();
 
-    if rr.is_empty() {
+    // unsorted / duplicated peaks or sampling_rate == 0: no valid beat template
+    if rr.is_empty() || rr.iter().any(|r| !(r.is_finite() && *r > 0.0)) {
         return (vec![0.0; n_samples], vec![]);
     }
 
@@ -462,7 +463,7 @@ pub fn compute_stats(rpeaks: &[usize], quality_per_beat: &[f64], sampling_rate: 
     // RR intervals in milliseconds
     let rr_ms: Vec<f64> = rpeaks
         .windows(2)
-        .map(|w| (w[1] - w[0]) as f64 / sampling_rate as f64 * 1000.0)
+        .map(|w| (w[1] as f64 - w[0] as f64) / sampling_rate as f64 * 1000.0)
         .collect();
 
     // Heart rate in BPM

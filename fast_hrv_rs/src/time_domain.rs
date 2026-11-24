@@ -54,50 +54,107 @@ pub fn percentile_sorted(sorted: &[f64], p: f64) -> f64 {
 
 const HIST_BIN_MS: f64 = 1000.0 / 128.0; // 7.8125 ms (Task Force standardı)
 
-fn histogram(rri: &[f64], min: f64, max: f64) -> Vec<usize> {
-    let n_bins = (((max - min) / HIST_BIN_MS).floor() as usize) + 1;
-    let mut h = vec![0usize; n_bins.max(1)];
-    for &x in rri {
-        let i = (((x - min) / HIST_BIN_MS).floor() as usize).min(h.len() - 1);
-        h[i] += 1;
+/// TINN için en fazla histogram kutusu (2048 × 7,8125 ms = 16 s RR aralığı). Daha geniş bir dağılım
+/// (ör. bir boşluğun tek RR olarak girmesi) TINN = NaN verir; maliyet O(B²) ile sınırlı kalır.
+pub const MAX_TINN_BINS: usize = 2048;
+
+/// NN histogramı, kutular 0'dan başlayan sabit ızgarada (NeuroKit2 `np.arange(0, max + bin, bin)` ile
+/// aynı kutular). Sadece dolu aralık `[k_min, k_last]` tutulur: `(k_min, sayımlar)`.
+/// Kutu sayısı `max_bins`'i aşarsa `None` (bellek ayrılmaz).
+fn histogram(sorted: &[f64], max_bins: usize) -> Option<(usize, Vec<usize>)> {
+    let max = sorted[sorted.len() - 1];
+    // numpy arange uzunluğu: ceil((max + bin) / bin) kenar → kenar - 1 kutu; son kutu sağdan kapalı
+    let n_edges = ((max + HIST_BIN_MS) / HIST_BIN_MS).ceil() as usize;
+    let k_last = n_edges.saturating_sub(2);
+    let bin = |x: f64| ((x / HIST_BIN_MS).floor() as usize).min(k_last);
+    let k_min = bin(sorted[0]);
+    let width = k_last - k_min + 1;
+    if width > max_bins {
+        return None;
     }
-    h
+    let mut h = vec![0usize; width];
+    for &x in sorted {
+        h[bin(x) - k_min] += 1;
+    }
+    Some((k_min, h))
+}
+
+/// En yüksek kutunun sayımı (HTI paydası), histogram ayırmadan (sıralı dizide koşu uzunluğu).
+fn histogram_peak(sorted: &[f64]) -> usize {
+    let max = sorted[sorted.len() - 1];
+    let n_edges = ((max + HIST_BIN_MS) / HIST_BIN_MS).ceil() as usize;
+    let k_last = n_edges.saturating_sub(2);
+    let bin = |x: f64| ((x / HIST_BIN_MS).floor() as usize).min(k_last);
+    let (mut best, mut run, mut cur) = (0usize, 0usize, usize::MAX);
+    for &x in sorted {
+        let k = bin(x);
+        if k == cur {
+            run += 1;
+        } else {
+            cur = k;
+            run = 1;
+        }
+        best = best.max(run);
+    }
+    best
 }
 
 /// TINN: histogram tepesinin iki yanına üçgen oturtup en küçük karesel hatayı veren taban (M − N).
-fn tinn(hist: &[usize], min: f64) -> f64 {
-    if hist.len() < 3 {
+///
+/// Hata `E(N, M) = A(N) + B(M)` biçiminde ayrışır (sol kenar yalnız N'ye, sağ kenar yalnız M'ye bağlı),
+/// bu yüzden iki kenar ayrı ayrı aranır: O(B²) (eski tam arama O(B³) idi; sonuç aynı). Tepe, eşit
+/// yükseklikte ilk kutu (NeuroKit `argmax` gibi).
+fn tinn(hist: &[usize]) -> f64 {
+    let len = hist.len();
+    if len < 3 {
         return f64::NAN;
     }
-    let (peak, &peak_h) = hist.iter().enumerate().max_by_key(|&(_, &v)| v).unwrap();
-    let peak_h = peak_h as f64;
-    let mut best = (f64::INFINITY, 0usize, 0usize);
+    let peak_h = *hist.iter().max().unwrap();
+    let peak = hist.iter().position(|&v| v == peak_h).unwrap();
+    if peak == 0 || peak + 1 >= len {
+        return f64::NAN;
+    }
+    let h = peak_h as f64;
+    let sq = |v: usize| (v as f64) * (v as f64);
+    // Sol: A(n) = Σ_{i<=n} v² + Σ_{n<i<=peak} (v_i − h (i−n)/(peak−n))²
+    let mut best_n = (f64::INFINITY, 0usize);
+    let mut below = 0.0;
     for n in 0..peak {
-        for m in (peak + 1)..hist.len() {
-            let mut err = 0.0;
-            for (i, &v) in hist.iter().enumerate() {
-                let q = if i <= n || i >= m {
-                    0.0
-                } else if i <= peak {
-                    peak_h * (i - n) as f64 / (peak - n) as f64
-                } else {
-                    peak_h * (m - i) as f64 / (m - peak) as f64
-                };
-                err += (v as f64 - q).powi(2);
-            }
-            if err < best.0 {
-                best = (err, n, m);
-            }
+        below += sq(hist[n]);
+        let mut err = below;
+        for (i, &v) in hist.iter().enumerate().take(peak + 1).skip(n + 1) {
+            let q = h * (i - n) as f64 / (peak - n) as f64;
+            err += (v as f64 - q).powi(2);
+        }
+        if err < best_n.0 {
+            best_n = (err, n);
         }
     }
-    let _ = min;
-    (best.2 - best.1) as f64 * HIST_BIN_MS
+    // Sağ: B(m) = Σ_{peak<i<m} (v_i − h (m−i)/(m−peak))² + Σ_{i>=m} v²
+    let mut best_m = (f64::INFINITY, 0usize);
+    let mut above: f64 = hist[peak + 1..].iter().map(|&v| sq(v)).sum();
+    for m in (peak + 1)..len {
+        let mut err = above;
+        for (i, &v) in hist.iter().enumerate().take(m).skip(peak + 1) {
+            let q = h * (m - i) as f64 / (m - peak) as f64;
+            err += (v as f64 - q).powi(2);
+        }
+        if err < best_m.0 {
+            best_m = (err, m);
+        }
+        above -= sq(hist[m]);
+    }
+    (best_m.1 - best_n.1) as f64 * HIST_BIN_MS
 }
 
-/// Bütün zaman alanı metriklerini hesaplar. En az 3 aralık gerekir; azsa alanlar NaN.
+/// Bütün zaman alanı metriklerini hesaplar. En az 3 aralık gerekir; azsa ya da girdide NaN/sonsuz
+/// değer varsa bütün alanlar NaN (panik yok).
+///
+/// HTI ve TINN histogramı 0'dan başlayan 7,8125 ms'lik ızgarayı kullanır (NeuroKit2 ile aynı kutular).
+/// TINN, dağılım [`MAX_TINN_BINS`] kutudan genişse NaN döner.
 pub fn time_domain(rri: &[f64]) -> TimeDomain {
     let nan = f64::NAN;
-    if rri.len() < 3 {
+    if rri.len() < 3 || rri.iter().any(|x| !x.is_finite()) {
         return TimeDomain {
             mean_nn: nan,
             sdnn: nan,
@@ -119,17 +176,17 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
         };
     }
     let mut sorted = rri.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted.sort_by(f64::total_cmp);
     let mean_nn = mean(rri);
     let sdnn = std_ddof(rri, 1);
     let rmssd = compute_rmssd(rri);
     let median_nn = percentile_sorted(&sorted, 50.0);
     let mut abs_dev: Vec<f64> = rri.iter().map(|x| (x - median_nn).abs()).collect();
-    abs_dev.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    abs_dev.sort_by(f64::total_cmp);
     let hr: Vec<f64> = rri.iter().map(|x| 60_000.0 / x).collect();
     let (min_nn, max_nn) = (sorted[0], sorted[sorted.len() - 1]);
-    let hist = histogram(rri, min_nn, max_nn);
-    let peak = *hist.iter().max().unwrap() as f64;
+    let peak = histogram_peak(&sorted) as f64;
+    let tinn_ms = histogram(&sorted, MAX_TINN_BINS).map_or(nan, |(_, h)| tinn(&h));
 
     TimeDomain {
         mean_nn,
@@ -148,7 +205,7 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
         mean_hr: mean(&hr),
         sd_hr: std_ddof(&hr, 1),
         hti: rri.len() as f64 / peak,
-        tinn: tinn(&hist, min_nn),
+        tinn: tinn_ms,
     }
 }
 
@@ -199,5 +256,76 @@ mod tests {
         let t = time_domain(&RRI);
         assert!(t.hti > 0.0 && t.hti <= RRI.len() as f64);
         assert!(t.tinn >= 0.0);
+    }
+
+    /// Eski O(B³) tam arama; ayrıştırılmış O(B²) sürümle aynı sonucu vermeli.
+    fn tinn_brute(hist: &[usize]) -> f64 {
+        let peak_h = *hist.iter().max().unwrap();
+        let peak = hist.iter().position(|&v| v == peak_h).unwrap();
+        let h = peak_h as f64;
+        let mut best = (f64::INFINITY, 0usize, 0usize);
+        for n in 0..peak {
+            for m in (peak + 1)..hist.len() {
+                let mut err = 0.0;
+                for (i, &v) in hist.iter().enumerate() {
+                    let q = if i <= n || i >= m {
+                        0.0
+                    } else if i <= peak {
+                        h * (i - n) as f64 / (peak - n) as f64
+                    } else {
+                        h * (m - i) as f64 / (m - peak) as f64
+                    };
+                    err += (v as f64 - q).powi(2);
+                }
+                if err < best.0 - 1e-9 {
+                    best = (err, n, m);
+                }
+            }
+        }
+        (best.2 - best.1) as f64 * HIST_BIN_MS
+    }
+
+    #[test]
+    fn tinn_separable_equals_brute_force() {
+        let mut state = 12345u64;
+        for _ in 0..200 {
+            let len = 3 + (state % 30) as usize;
+            let hist: Vec<usize> = (0..len)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    ((state >> 33) % 20) as usize
+                })
+                .collect();
+            let peak = hist
+                .iter()
+                .position(|&v| v == *hist.iter().max().unwrap())
+                .unwrap();
+            if peak == 0 || peak + 1 >= len {
+                continue;
+            }
+            assert_eq!(tinn(&hist), tinn_brute(&hist), "{hist:?}");
+        }
+    }
+
+    #[test]
+    fn nan_input_gives_nan_not_panic() {
+        let mut v = RRI.to_vec();
+        v[3] = f64::NAN;
+        let t = time_domain(&v);
+        assert!(t.sdnn.is_nan() && t.tinn.is_nan() && t.hti.is_nan());
+    }
+
+    #[test]
+    fn huge_rr_is_bounded() {
+        // tek bir 69 sn'lik RR (boşluk) TINN'i NaN yapar, süreyi patlatmaz
+        let mut v: Vec<f64> = (0..400).map(|i| 800.0 + (i as f64).sin() * 30.0).collect();
+        v[100] = 69_000.0;
+        let t0 = std::time::Instant::now();
+        let t = time_domain(&v);
+        assert!(t.tinn.is_nan());
+        assert!(t.hti.is_finite());
+        assert!(t0.elapsed().as_millis() < 500);
     }
 }

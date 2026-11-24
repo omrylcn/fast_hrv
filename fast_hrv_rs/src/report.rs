@@ -7,6 +7,7 @@
 //! ```
 
 use crate::{
+    error::HrvError,
     frequency::{FrequencyDomain, frequency_domain},
     hrv::{compute_apen, compute_asymmetry, compute_dfa, compute_poincare, compute_sampen},
     time_domain::{TimeDomain, time_domain},
@@ -56,8 +57,13 @@ pub struct HrvReport {
 
 /// NN aralıklarından (ms) bütün metrikler. Kısa kayıtlarda hesaplanamayanlar NaN döner:
 /// zaman alanı ≥ 3 aralık, frekans alanı ≥ 30 sn, entropi/DFA ≥ 16 aralık.
+///
+/// Girdide NaN/sonsuz bir aralık varsa bütün metrikler NaN döner (panik yok).
 pub fn hrv(rri: &[f64]) -> HrvReport {
     let nan = f64::NAN;
+    if rri.iter().any(|x| !x.is_finite()) {
+        return HrvReport::nan(rri.len());
+    }
     let (poincare, asym) = if rri.len() >= 3 {
         (Some(compute_poincare(rri)), Some(compute_asymmetry(rri)))
     } else {
@@ -99,11 +105,53 @@ pub fn hrv(rri: &[f64]) -> HrvReport {
 }
 
 /// R tepe örnek indekslerinden (ve örnekleme frekansından) NN aralıkları (ms).
+///
+/// Panik yok: sıralı olmayan ya da yinelenen bir tepe çifti (aralık ≤ 0) veya `sampling_rate == 0`
+/// o aralık için NaN üretir. Doğrulama ve hata için [`try_rri_from_peaks`]; boşluklu kayıtlar için
+/// [`crate::gaps::rri_with_gaps`].
 pub fn rri_from_peaks(peaks: &[usize], sampling_rate: u32) -> Vec<f64> {
     peaks
         .windows(2)
-        .map(|w| (w[1] - w[0]) as f64 * 1000.0 / sampling_rate as f64)
+        .map(|w| {
+            if w[1] > w[0] && sampling_rate > 0 {
+                (w[1] - w[0]) as f64 * 1000.0 / sampling_rate as f64
+            } else {
+                f64::NAN
+            }
+        })
         .collect()
+}
+
+/// [`rri_from_peaks`] with validation: peaks must be strictly increasing and `sampling_rate > 0`.
+pub fn try_rri_from_peaks(peaks: &[usize], sampling_rate: u32) -> Result<Vec<f64>, HrvError> {
+    if sampling_rate == 0 {
+        return Err(HrvError::InvalidSamplingRate(0.0));
+    }
+    if let Some(i) = peaks.windows(2).position(|w| w[1] <= w[0]) {
+        return Err(HrvError::UnsortedPeaks { index: i + 1 });
+    }
+    Ok(rri_from_peaks(peaks, sampling_rate))
+}
+
+impl HrvReport {
+    /// Report with every metric NaN.
+    pub fn nan(n: usize) -> Self {
+        let nan = f64::NAN;
+        let mut r = hrv(&[]);
+        r.n = n;
+        r.nonlinear = NonLinear {
+            sd1: nan,
+            sd2: nan,
+            sd1_sd2: nan,
+            csi: nan,
+            cvi: nan,
+            sampen: nan,
+            apen: nan,
+            dfa_alpha1: nan,
+            dfa_alpha2: nan,
+        };
+        r
+    }
 }
 
 #[cfg(test)]
@@ -147,6 +195,20 @@ mod tests {
         assert!(
             r.frequency.hf > r.frequency.lf,
             "solunum genliği daha büyük"
+        );
+    }
+
+    #[test]
+    fn invalid_inputs_do_not_panic() {
+        let r = rri_from_peaks(&[100, 50, 50, 600], 512);
+        assert!(r[0].is_nan() && r[1].is_nan() && r[2].is_finite());
+        assert!(try_rri_from_peaks(&[100, 50], 512).is_err());
+        assert!(rri_from_peaks(&[0, 512], 0)[0].is_nan());
+        let mut v: Vec<f64> = (0..400).map(|i| 800.0 + (i as f64).sin() * 30.0).collect();
+        v[5] = f64::NAN;
+        let rep = hrv(&v);
+        assert!(
+            rep.time.rmssd.is_nan() && rep.frequency.lf.is_nan() && rep.nonlinear.sampen.is_nan()
         );
     }
 

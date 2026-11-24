@@ -11,11 +11,11 @@
 //! - **pNN50 / pNN20**: NeuroKit divides by the number of RR intervals (`len(diff) + 1`), fast-hrv
 //!   by the number of successive differences (Task Force). The test rescales fast-hrv's value by
 //!   `(n - 1) / n` and then compares strictly.
-//! - **loose**, with the reason next to the tolerance: method differences (frequency domain:
-//!   interpolation and Welch settings; HTI/TINN: histogram origin).
-//! - **report only**: DFA α1/α2, whose definition differs (scales 4–16 / 16–64 beats vs NeuroKit's
-//!   4–11 / 12–N/10, non-overlapping windows, mean of RMS instead of RMS of variance). Printed, not
-//!   asserted.
+//! - **loose**, with the reason next to the tolerance: method differences in the frequency domain
+//!   (interpolation and Welch settings) for records of 5 min or more.
+//! - **report only** (printed, not asserted): VLF and frequency metrics of records < 5 min; TINN
+//!   (different search); DFA α1/α2, whose definition differs (scales 4–16 / 16–64 beats vs
+//!   NeuroKit's 4–11 / 12–N/10, non-overlapping windows, mean of RMS instead of RMS of variance).
 
 use std::collections::BTreeMap;
 
@@ -114,9 +114,9 @@ fn class(path: &str, duration_s: f64) -> Class {
             0.30,
             "method: 4 Hz cubic spline + Welch 256 samples (fast-hrv) vs 100 Hz quadratic + Welch N/2, nfft 2N (NK)",
         ),
-        "time.hti" | "time.tinn" => Class::Tol(
-            1.5,
-            "histogram starts at min(RR) in fast-hrv, at 0 in NeuroKit (bin 7.8125 ms)",
+        "time.tinn" => Class::ReportOnly(
+            "TINN search differs: NeuroKit's M loop is not reset for each N and its error covers only [N, M]; \
+             fast-hrv does the full least-squares search (same 0-based 7.8125 ms histogram, so HTI is strict)",
         ),
         "nonlinear.dfa_alpha1" | "nonlinear.dfa_alpha2" => {
             Class::ReportOnly("different DFA definition (scales, overlap, F(n)); see module docs")
