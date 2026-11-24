@@ -4,13 +4,17 @@
 //! ```text
 //! cargo bench --bench capacity                      # 500 users, 10 min of signal
 //! cargo bench --bench capacity -- --users 200 --seconds 600
+//! cargo bench --bench capacity -- --stream          # stage 2a through StreamDetector
 //! ```
 //!
 //! Pipeline per user (512 Hz single-lead ECG in 32-sample packets, one worker thread):
 //! 1. every packet: `EcgStreamFilter` (0.5–40 Hz, causal, state carried across packets);
 //! 2. every 10 s: `dual_detect` on the window plus 2 s margins (14 s), full `SqiReport` on the 10 s
 //!    core (flat line + saturation on raw counts, kSQI, pSQI + basSQI from one PSD, template
-//!    correlation, bSQI, RR plausibility, zhao2018);
+//!    correlation, bSQI, RR plausibility, zhao2018). With `--stream`, the clean samples go packet
+//!    by packet into a `StreamDetector` (same `dual_detect` per window, de-duplicated peak output);
+//!    the SQI then runs in its window callback on the detector's own buffer, and the session keeps
+//!    no clean-sample ring;
 //! 3. every 60 s: Kubios `fix_peaks` on the last 5 min of peaks, time domain on the last 60 s;
 //! 4. every 5 min: full `hrv()` (time + frequency + nonlinear + asymmetry) on the last 5 min.
 //!
@@ -31,6 +35,7 @@ use fast_hrv::detect::{DualConfig, dual_detect};
 use fast_hrv::ecg::{EcgFilterConfig, EcgStreamFilter};
 use fast_hrv::filter::SosSection;
 use fast_hrv::sqi::{SqiConfig, SqiEngine, SqiInput};
+use fast_hrv::stream::{StreamConfig, StreamDetector, StreamPeaks, StreamWindow};
 
 // -----------------------------------------------------------------------------
 // Heap accounting (counts live and peak heap bytes; used for the memory figures)
@@ -307,12 +312,22 @@ impl Synth {
 
 const STAGES: [&str; 6] = [
     "1 EcgStreamFilter (per 32-sample packet)",
-    "2a dual_detect, 14 s window",
+    "2a dual_detect, 14 s window", // replaced by STAGE_2A_STREAM with --stream
     "2b SqiReport (all indices), 10 s",
     "3a Kubios fix_peaks, last 5 min",
     "3b time domain, last 60 s",
     "4  hrv() full, last 5 min",
 ];
+const STAGE_2A_STREAM: &str = "2a StreamDetector (dual), per window";
+
+fn stage_name(i: usize, stream: bool) -> &'static str {
+    if i == 1 && stream {
+        STAGE_2A_STREAM
+    } else {
+        STAGES[i]
+    }
+}
+
 /// Calls per second of signal of each stage (packets, windows, minutes, 5 minutes).
 const RATE: [f64; 6] = [
     PACKETS_PER_S as f64,
@@ -364,6 +379,8 @@ struct Worker {
     sink: f64,
     /// Primary R peaks kept in core windows (sanity check of the synthetic signal).
     peaks_found: u64,
+    /// Peaks emitted by one `StreamDetector::push` (scratch).
+    out: StreamPeaks,
 }
 
 impl Worker {
@@ -380,6 +397,7 @@ impl Worker {
             stages: Default::default(),
             sink: 0.0,
             peaks_found: 0,
+            out: StreamPeaks::default(),
         }
     }
 }
@@ -388,20 +406,30 @@ impl Worker {
 struct Session {
     filt: EcgStreamFilter,
     n: u64,          // samples received
-    clean: Vec<f64>, // ring of filtered samples (RING)
+    clean: Vec<f64>, // ring of filtered samples (RING); empty with --stream
     raw: Vec<i32>,   // ring of raw ADC counts (RING)
+    /// `--stream`: the detector (holds the clean samples of the current chunk) and the last
+    /// filtered packet waiting to be pushed into it.
+    det: Option<StreamDetector>,
+    pkt: [f64; PACKET],
+    pkt_len: usize,
     next_window: u64,
     peaks: VecDeque<usize>, // absolute primary R-peak indices, last 5 min
     corrected: Vec<usize>,  // Kubios output of the last 60 s step
 }
 
 impl Session {
-    fn new() -> Self {
+    fn new(stream: bool) -> Self {
         Session {
             filt: EcgStreamFilter::new(FSF, &EcgFilterConfig::default()).expect("filter design"),
             n: 0,
-            clean: vec![0.0; RING],
+            clean: if stream { Vec::new() } else { vec![0.0; RING] },
             raw: vec![0; RING],
+            det: stream.then(|| {
+                StreamDetector::new(FSF, 0, StreamConfig::default()).expect("stream detector")
+            }),
+            pkt: [0.0; PACKET],
+            pkt_len: 0,
             next_window: 0,
             peaks: VecDeque::with_capacity(512),
             corrected: Vec::new(),
@@ -417,6 +445,9 @@ impl Session {
             + self.raw.capacity() * 4
             + self.peaks.capacity() * std::mem::size_of::<usize>()
             + self.corrected.capacity() * std::mem::size_of::<usize>()
+            + self.det.as_ref().map_or(0, |d| {
+                d.state_bytes() - std::mem::size_of::<StreamDetector>()
+            })
     }
 
     /// Stage 1: one packet of raw counts.
@@ -427,6 +458,15 @@ impl Session {
             *b = r as f64;
         }
         self.filt.process_inplace(buf);
+        if self.det.is_some() {
+            for &r in packet {
+                self.raw[(self.n % RING as u64) as usize] = r;
+                self.n += 1;
+            }
+            self.pkt[..buf.len()].copy_from_slice(buf);
+            self.pkt_len = buf.len();
+            return;
+        }
         for (&r, &c) in packet.iter().zip(buf.iter()) {
             let i = (self.n % RING as u64) as usize;
             self.raw[i] = r;
@@ -435,9 +475,83 @@ impl Session {
         }
     }
 
+    /// Stage 2a/2b with `--stream`: push the last filtered packet into the detector. The detectors
+    /// (and the SQI, in the window callback) run when the packet completes a window. Returns the
+    /// SQI time spent inside the call (ns), which the caller removes from the 2a block time.
+    fn push_stream(&mut self, w: &mut Worker) -> u64 {
+        let Some(det) = self.det.as_mut() else {
+            return 0;
+        };
+        let completes = self.n >= det.next_window_ready_at();
+        let t0 = completes.then(Instant::now);
+        let raw = &self.raw;
+        let Worker {
+            sqi,
+            raw_core,
+            stages,
+            sink,
+            out,
+            ..
+        } = w;
+        out.clear();
+        let mut sqi_ns = 0u64;
+        let mut on_window = |win: &StreamWindow<'_>| {
+            let t1 = Instant::now();
+            let r = win.core_range();
+            let prim: Vec<usize> = win
+                .core_indices(win.primary)
+                .into_iter()
+                .map(|i| i - r.start)
+                .collect();
+            let sec: Vec<usize> = win
+                .secondary
+                .map(|s| win.core_indices(s))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|i| i - r.start)
+                .collect();
+            raw_core.clear();
+            for a in win.core.0..win.core.1 {
+                raw_core.push(raw[(a % RING as u64) as usize]);
+            }
+            let input = SqiInput {
+                peaks_secondary: Some(&sec),
+                raw: Some(raw_core),
+                ..SqiInput::new(&win.samples[r], FSF, &prim)
+            };
+            let rep = sqi.report(&input);
+            *sink +=
+                rep.ksqi.unwrap_or(0.0) + rep.issues.len() as f64 + rep.zhao.reasons.len() as f64;
+            let ns = t1.elapsed().as_nanos() as u64;
+            stages[2].add(ns);
+            sqi_ns += ns;
+        };
+        det.push_with(&self.pkt[..self.pkt_len], out, &mut on_window)
+            .expect("finite samples");
+        if let Some(t0) = t0 {
+            let ns = t0.elapsed().as_nanos() as u64;
+            w.stages[1].calls += 1;
+            w.stages[1].per_call_ns.push(ns.saturating_sub(sqi_ns));
+        }
+        w.peaks_found += w.out.primary.len() as u64;
+        for p in &w.out.primary {
+            self.peaks.push_back(p.index as usize);
+        }
+        let done = det.next_window_ready_at() - MARGIN - WINDOW; // end of the last processed core
+        let horizon = done.saturating_sub(PEAK_HISTORY) as usize;
+        while self.peaks.front().is_some_and(|&p| p < horizon) {
+            self.peaks.pop_front();
+        }
+        sqi_ns
+    }
+
     /// Stages 2–4 that are due after the samples received so far.
     fn tick(&mut self, w: &mut Worker) {
-        while self.n >= (self.next_window + 1) * WINDOW + MARGIN {
+        if let Some(det) = &self.det {
+            // windows ran inside `push_stream`; keep the core grid for the 60 s step
+            self.next_window = (det.next_window_ready_at() - MARGIN) / WINDOW - 1;
+        }
+        while self.det.is_none() && self.n >= (self.next_window + 1) * WINDOW + MARGIN {
             self.window(w, self.next_window);
             self.next_window += 1;
         }
@@ -548,7 +662,13 @@ struct FleetResult {
 
 /// `stagger_s = 0`: every session starts at t = 0. Otherwise session `u` starts at
 /// `floor(u · stagger_s / users)` s. Seconds `measure_from..seconds` are recorded per second.
-fn run_fleet(users: usize, seconds: u64, stagger_s: u64, measure_from: u64) -> FleetResult {
+fn run_fleet(
+    users: usize,
+    seconds: u64,
+    stagger_s: u64,
+    measure_from: u64,
+    stream: bool,
+) -> FleetResult {
     let mut synth: Vec<Synth> = (0..users).map(Synth::new).collect();
     let starts: Vec<u64> = (0..users)
         .map(|u| (u as u64 * stagger_s) / users as u64)
@@ -556,7 +676,7 @@ fn run_fleet(users: usize, seconds: u64, stagger_s: u64, measure_from: u64) -> F
     let mut packets = vec![0i32; users * FS as usize];
     let mut worker = Worker::new();
     let heap0 = live();
-    let mut sessions: Vec<Session> = (0..users).map(|_| Session::new()).collect();
+    let mut sessions: Vec<Session> = (0..users).map(|_| Session::new(stream)).collect();
     let sessions_heap_initial = live() - heap0;
     let mut second_ms = Vec::new();
     let mut user_seconds = 0.0;
@@ -569,20 +689,31 @@ fn run_fleet(users: usize, seconds: u64, stagger_s: u64, measure_from: u64) -> F
                 *v = synth[u].sample();
             }
         }
-        // stage 1: packets arrive interleaved over users
-        let t0 = Instant::now();
+        // stage 1: packets arrive interleaved over users (with --stream each packet round is
+        // followed by a round of StreamDetector pushes, timed as stage 2a / 2b)
+        let before: u128 = worker.stages[1..].iter().map(|s| s.total_ns).sum();
+        let mut filt_ns = 0u64;
         for p in 0..PACKETS_PER_S {
+            let t0 = Instant::now();
             for &u in &active {
                 let base = u * FS as usize + p * PACKET;
                 sessions[u].push_packet(&packets[base..base + PACKET]);
             }
+            filt_ns += t0.elapsed().as_nanos() as u64;
+            if stream {
+                let t1 = Instant::now();
+                let mut sqi_ns = 0u64;
+                for &u in &active {
+                    sqi_ns += sessions[u].push_stream(&mut worker);
+                }
+                let block = t1.elapsed().as_nanos() as u64;
+                worker.stages[1].total_ns += block.saturating_sub(sqi_ns) as u128;
+            }
         }
-        let filt_ns = t0.elapsed().as_nanos() as u64;
         let st = &mut worker.stages[0];
         st.calls += (PACKETS_PER_S * active.len()) as u64;
         st.total_ns += filt_ns as u128;
         // stages 2–4
-        let before: u128 = worker.stages[1..].iter().map(|s| s.total_ns).sum();
         for &u in &active {
             sessions[u].tick(&mut worker);
         }
@@ -709,6 +840,7 @@ fn arg(name: &str, default: u64) -> u64 {
 
 fn main() {
     let users = arg("--users", 500).max(1) as usize;
+    let stream = std::env::args().any(|a| a == "--stream");
     let seconds = arg("--seconds", 600).max(2 * HRV_EVERY_S);
     let wall0 = Instant::now();
     let cpu0 = proc_stat();
@@ -728,6 +860,14 @@ fn main() {
     println!(
         "  {users} users, {seconds} s of synthetic 512 Hz ECG each, 32-sample packets, one thread"
     );
+    println!(
+        "  stage 2a: {}",
+        if stream {
+            "StreamDetector (packet by packet, dual detection, SQI in the window callback)"
+        } else {
+            "dual_detect on a 14 s chunk copied from the session ring (default; --stream for StreamDetector)"
+        }
+    );
 
     // SQI engine size (one per worker): heap after the first report.
     let mut tmp = Synth::new(1);
@@ -743,11 +883,11 @@ fn main() {
     // 1 user (hot caches), aligned
     PEAK.store(live(), Relaxed);
     let peak_base = live();
-    let one = run_fleet(1, seconds, 0, 0);
+    let one = run_fleet(1, seconds, 0, 0, stream);
     let worker_peak_extra = PEAK.load(Relaxed) - peak_base;
     // N users interleaved, aligned (all steps in the same second) and staggered
-    let aligned = run_fleet(users, seconds, 0, 0);
-    let staggered = run_fleet(users, seconds, HRV_EVERY_S, HRV_EVERY_S);
+    let aligned = run_fleet(users, seconds, 0, 0, stream);
+    let staggered = run_fleet(users, seconds, HRV_EVERY_S, HRV_EVERY_S, stream);
 
     let us = per_user_second_us(&staggered.stages);
     let total: f64 = us.iter().sum();
@@ -771,7 +911,7 @@ fn main() {
         let s = &staggered.stages[i];
         println!(
             "| {:<41} | {:>8} | {:>9.2} | {:>9} | {:>9} | {:>11.2} | {:>5.1}% |",
-            STAGES[i],
+            stage_name(i, stream),
             s.calls,
             s.mean_us(),
             fmt1(s.pct_us(0.99)),
@@ -878,7 +1018,12 @@ fn main() {
     println!();
     println!("Memory");
     println!(
-        "  per session (filter state + 15 s clean f64 ring + 15 s raw i32 ring + 5 min peaks + Kubios output): {:.1} KiB (heap at creation {:.1} KiB)",
+        "  per session ({}): {:.1} KiB (heap at creation {:.1} KiB)",
+        if stream {
+            "filter state + StreamDetector + 15 s raw i32 ring + 5 min peaks + Kubios output"
+        } else {
+            "filter state + 15 s clean f64 ring + 15 s raw i32 ring + 5 min peaks + Kubios output"
+        },
         staggered.session_bytes as f64 / 1024.0,
         staggered.sessions_heap_measured as f64 / 1024.0
     );
