@@ -234,3 +234,25 @@ taskset -c 2 cargo bench --bench capacity | tee capacity.txt
 Windows'ta CPU modeli `PROCESSOR_IDENTIFIER`'dan basılır (aile/model kodu); tam ad ve saat için:
 `Get-CimInstance Win32_Processor | Select-Object Name, MaxClockSpeed, CurrentClockSpeed`.
 Sonucu (`capacity.txt`) ve CPU adını locaya yazın; bu belgedeki tabloları sunucu sayılarıyla güncelleriz.
+
+## 8. Ek (0.4.0): 2a adımı `StreamDetector` ile (`--stream`)
+
+`cargo bench --bench capacity -- --stream`: temiz örnekler paket paket `StreamDetector`'a giriyor
+(pencere başına aynı `dual_detect`, tekilleştirilmiş tepeler 5 dk geçmişe), SQI pencere geri
+çağrısında detektörün kendi tamponu üzerinde çalışıyor; oturum temiz `f64` halka tamponu tutmuyor
+(detektör tamponu onun yerini alıyor). Paket başına defter tutma maliyeti 2a'ya yazılıyor.
+Aynı makine, aynı gün, çekirdek 3, 500 kullanıcı × 600 sn, yayılmış takvim:
+
+| | varsayılan (`dual_detect`, halkadan kopya) | `--stream` |
+|---|---:|---:|
+| 2a µs / çağrı (ort. / p99) | 167,9 / 210,5 | 154,7 / 188,6 |
+| 2a µs / kullanıcı / sn | 16,79 | 15,47 |
+| 2b µs / kullanıcı / sn | 16,29 | 17,27 |
+| **Toplam µs / kullanıcı / sn** | **50,54** | **50,33** |
+| hizalı / 1 kullanıcı | 54,80 / 49,41 | 55,04 / 47,71 |
+| oturum başına bellek (hesap / ölçülen yığın) | 98,6 / 95,1 KiB | 98,1 / 94,6 KiB |
+
+Sonuç: maliyet değişmiyor (toplam fark ölçüm gürültüsü içinde, %0,4). 2a biraz ucuzluyor (14 sn
+parçanın halkadan kopyası yok), 2b'deki +1 µs gürültü/önbellek düzeyinde. Bellek aynı: detektör
+durumu (59,9 KiB: 14 sn `f64` tampon + bekleyen tepeler) kaldırılan 60 KiB'lik temiz halkanın yerini
+alıyor; ~98 KiB/oturum bütçesi korunuyor. Ayrıntı: `CHANGES-STREAM.md`.

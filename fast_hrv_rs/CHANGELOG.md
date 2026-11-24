@@ -2,6 +2,27 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] - unreleased
+
+### Added
+- `stream` module: `StreamDetector` with `StreamConfig`, `StreamPeak`, `StreamPeaks`, `StreamWindow`.
+  Live, packet-by-packet form of the windowed detection pipeline: clean samples in packets of any size,
+  each 10 s window (plus 2 s margins) processed as soon as its right margin is complete, primary
+  (Elgendi + refinement) and optionally secondary (`dual_detect`) peaks emitted as absolute indices plus
+  sub-sample positions. Output bit-identical to `elgendi_refined_windowed` / `dual_detect_windowed` for
+  any packetisation. `push` / `push_with` (per-window callback with the chunk, its detections and bSQI),
+  `flush`, `reset_at(next_index)` (gap; returns the `gaps::Gap`), `state_bytes`, `max_latency_samples`,
+  `next_window_ready_at`. Latency 2.3–12 s (worst case ~12.3 s) with the defaults; state 59.9 KiB per
+  stream at 512 Hz, allocated once.
+- `detect::dual_detect_windowed` → `WindowedDual { primary, secondary }`: both detectors of `dual_detect`
+  over a long recording on the absolute window grid (batch reference of `StreamDetector`).
+- `tests/stream_detect.rs`: raw → `EcgStreamFilter` → `StreamDetector` vs the batch path for 1/32/33/512/
+  7168/random packet sizes and seven start offsets, other grids and sampling rates, the window callback,
+  gaps / `reset_at`, a 30 min synthetic run with artifacts (latency and state size printed); a
+  de-duplication stress test with a dense fake detector (unit test).
+- `benches/capacity.rs -- --stream`: stage 2a through `StreamDetector` (SQI in the window callback, no
+  clean-sample ring per session).
+
 ## [0.3.0] - unreleased
 
 ### Added

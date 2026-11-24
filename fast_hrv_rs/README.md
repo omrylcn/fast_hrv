@@ -5,7 +5,8 @@ Fast, dependency-light **heart rate variability (HRV)** analysis from ECG, in Ru
 - **Signal:** Butterworth filter design (SciPy-equivalent), NeuroKit2-compatible zero-phase ECG cleaning,
   a causal **streaming** filter for packet-by-packet processing, R-peak detection (NeuroKit2 method and
   Elgendi two-moving-average detector), sub-sample R-peak refinement, a dual-detector API with bSQI,
-  windowed processing of long recordings, Kubios artifact correction (NeuroKit2-equivalent),
+  windowed processing of long recordings and a **streaming** detector with exactly the same output,
+  Kubios artifact correction (NeuroKit2-equivalent),
   gap-aware RR intervals
 - **Signal quality (`sqi`):** absolute indices: flat line, saturation, kSQI, pSQI, basSQI (Zhao & Zhang 2018),
   bSQI (detector agreement), template correlation, RR plausibility, zhao2018 fusion; plus the relative
@@ -50,6 +51,8 @@ for packet in packets { let clean = f.process(packet); /* … */ }
 | `rri_from_positions`, `rri_from_times` | RR intervals (ms) from sub-sample positions or times in seconds (the integer `rri_from_peaks` is unchanged) |
 | `detect::dual_detect` + `DualConfig` | primary (Elgendi + refinement) and secondary (NeuroKit2 method) peaks on the same window and their bSQI (tolerance 0.15 s by default, 0.05 s variant documented); results only, no gate |
 | `detect::detect_windowed`, `elgendi_refined_windowed` + `WindowConfig` | long recordings in fixed windows (default 10 s + 2 s margin each side) anchored at absolute sample indices; the detector restarts in every window and overlap duplicates are removed deterministically, so the output does not depend on where the recording starts |
+| `detect::dual_detect_windowed` | both detectors of `dual_detect` over a long recording in the same windows (primary and secondary positions, each de-duplicated) |
+| `stream::StreamDetector` + `StreamConfig` | the windowed pipeline packet by packet (see below): same peaks as `elgendi_refined_windowed` / `dual_detect_windowed`, bit for bit |
 
 The default Elgendi detector (causal 8–20 Hz filter) reports beats ~37 ms after the R peak; the
 refinement removes this delay (synthetic signals with known R: every refined peak within 0.4 samples).
@@ -65,6 +68,39 @@ let r = refine_peaks(&clean, 512.0, &cand, &RefineConfig::default())?;
 let rri = fast_hrv::rri_from_positions(&r.positions, 512.0);          // sub-sample RR (ms)
 let d = dual_detect(&clean[..5120], 512.0, &DualConfig::default())?;   // one 10 s window
 println!("bSQI {:?}", d.bsqi.map(|b| b.bsqi));
+```
+
+### Streaming detection
+
+`StreamDetector` takes clean samples (e.g. from `EcgStreamFilter`) in packets of any size and processes
+each 10 s window as soon as its 2 s right margin has arrived. It emits confirmed peaks (absolute sample
+index + sub-sample position) of the primary detector and, by default, of the secondary detector. For a
+segment starting at absolute index `s0`, the emitted peaks are **bit-identical** to
+`elgendi_refined_windowed` / `dual_detect_windowed` on the same samples with `start_sample = s0`, for any
+packetisation (tested with 1, 32, 33, 512, 7168 and random packet sizes, several start offsets, gaps and a
+30 min run with artifacts: `tests/stream_detect.rs`).
+
+- **Latency** (defaults): a peak is emitted 2.3–12 s after the R peak (window + margin; ~7 s on average);
+  a peak in the last ~0.3 s of a window may be a duplicate of the next window's and waits for it, worst
+  case window + margin + 2 · dedup ≈ 12.3 s (`max_latency_samples()`).
+- **State**: one buffer of at most window + 2 · margin samples (14 s, 56 KiB at 512 Hz) plus pending peaks:
+  `state_bytes()` = 59.9 KiB per stream at 512 Hz (500 streams ≈ 29 MiB), constant over time. The buffer
+  is the chunk the detectors read; `push_with` gives each processed window (samples, its own detections,
+  bSQI) to a callback, e.g. for signal quality on the core, so no second sample ring is needed.
+- **Gaps**: `reset_at(next_index)` ends the segment (its last windows are processed with clipped chunks,
+  as the batch path does at the end of a recording) and returns the `Gap` for `gaps::split_at_gaps`.
+  `flush()` ends the recording.
+
+```rust
+use fast_hrv::stream::{StreamConfig, StreamDetector, StreamPeaks};
+let mut filt = fast_hrv::EcgStreamFilter::new(512.0, &fast_hrv::EcgFilterConfig::default())?;
+let mut det = StreamDetector::new(512.0, session_start_index, StreamConfig::default())?;
+let mut out = StreamPeaks::default();
+for packet in packets {                     // 32 raw samples
+    det.push(&filt.process(packet), &mut out)?;
+    // out.primary / out.secondary: confirmed peaks (index: u64, position: f64)
+}
+det.flush(&mut out)?;
 ```
 
 ## Gaps
@@ -131,7 +167,8 @@ synthetic 5-minute ECG at 512 Hz (median of 21 runs). Example (Intel i7-9700K, R
 `cargo bench --bench capacity` simulates the planned per-user live pipeline (stream filter, 10 s dual
 detection + SQI, 60 s Kubios + time domain, 5 min full `hrv()`) for 500 interleaved synthetic sessions
 and reports CPU per user, users per core, per-second load spikes and memory; results and method in
-[CAPACITY.md](CAPACITY.md) (Turkish).
+[CAPACITY.md](CAPACITY.md) (Turkish). `-- --stream` runs the detection stage through `StreamDetector`
+(same cost within noise: 50.3 vs 50.5 µs per user per second of signal; memory per session unchanged).
 
 ## Features
 
