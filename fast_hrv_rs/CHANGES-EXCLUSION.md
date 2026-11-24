@@ -34,7 +34,7 @@ sentetik.
 | `exclusion::classify_beats(positions: &[f64], fs, &ExclusionParams, disagreement: Option<&[bool]>)` → `BeatExclusion` | tek boşluksuz kayıt, alt-örnek konumlar. Eklenen atım tam orta noktaya |
 | `classify_peaks(peaks: &[usize], ...)` | tamsayı indeksler. Eklenen atım `prev + floor((next − prev)/2)`, bütün çıktı konumları tamsayı değerli |
 | `classify_segments(&[Vec<f64>], ...)`, `concat_nn(&[BeatExclusion])` | parça başına sınıflama. Birleştirmede parçalar arasına bir `NaN` / geçersiz NN konuyor, hiçbir fark boşluğu aşmıyor |
-| `ExclusionParams { kubios, premature_factor: 0.85, compensatory_factor: 0.5, two_stage: true, suspect_move_s: 0.030, exclude_inserted_removed: true, physiological_rr_s: None }` | parametreler (aşağıda) |
+| `ExclusionParams { kubios, premature_factor: 0.85, compensatory_factor: 0.5, two_stage: true, suspect_move_s: 0.030, exclude_inserted_removed: false, physiological_rr_s: None }` | parametreler (aşağıda) |
 | `BeatExclusion { positions, beats: Vec<BeatFlags>, input_classes, input_to_output, removed, splits, nn_valid, nn_usable, sampling_rate, params }` | sonuç. Tutulan girdi atımları konumunu bit düzeyinde koruyor, **hiçbir atım taşınmıyor** |
 | `BeatFlags { class, input_index, inserted, ectopic_kubios, ectopic_pattern, suspect_stage, suspect_move_s, disagreement }` | çıktı atımı başına. `is_ectopic()`, `is_suspect()`, `is_far_suspect(x)` |
 | `BeatClass::{Normal, Ectopic, Suspect, Disagreement, Inserted, Missed, Extra, PhysiologicalLimit}` | çıktı atımları: Normal / Ectopic / Suspect / Disagreement / Inserted. Girdi atımları: Normal / Ectopic / Suspect / Disagreement / Missed / Extra / PhysiologicalLimit |
@@ -80,7 +80,7 @@ NaN eşik NaN kalıyor (`np.maximum` gibi).
    atımların ±1 atım dışındaki bayraklar şüpheli oluyor (aşama 2). Çıktıda hiçbir atım taşınmıyor.
 4. **NN geçerliliği:** `k` ile `k+1` atımları arasındaki aralık geçersiz, eğer (i) atımlardan biri ektopik,
    şüpheli ya da çağıranın verdiği uyuşmazlık atımıysa (yani bu atımların **hem önceki hem sonraki**
-   aralığı), (ii) fizyolojik bölmeyi aşıyorsa, (iii) `exclude_inserted_removed` açıkken (varsayılan)
+   aralığı), (ii) fizyolojik bölmeyi aşıyorsa, (iii) sadece `exclude_inserted_removed` açıksa (0.6.1'den beri varsayılan kapalı)
    atımlardan biri eklenmişse ya da aralığın içinde çıkarılmış bir atım varsa. Boşluk: her boşluksuz parça
    ayrı işleniyor (`classify_segments`, `concat_nn`).
 
@@ -117,7 +117,7 @@ atım geliyor) > Disagreement > Normal.
 | `premature_factor`, `compensatory_factor` | 0,85, 0,5 | yaygın erken atım ölçütü (≥ %15 erken) ve yarı telafi; rapor 12 |
 | `two_stage` | açık | rapor 12 §3.3 |
 | `suspect_move_s` | 0,030 s | rapor 12 §1.2 (20 ms fiducial sapmasının 1,5 katı, 50 ms uyuşmazlık toleransının altında). 20/30/50 ms sonucu belirlemiyor |
-| `exclude_inserted_removed` | açık | görev tanımı. Kapalı = araştırma referansı |
+| `exclude_inserted_removed` | kapalı (0.6.1) | RW1 + enjeksiyon ölçümü: kapsama aynı, açıkken RMSSD hatası biraz daha kötü (60 sn p90 %7,1'e karşı %7,9, %1–2 artefaktta); araştırma referansıyla aynı |
 | `physiological_rr_s` | yok | nötr. Ürün örneği `(0.3, 2.0)` |
 
 Ürün eşikleri (artefakt oranı ≤ %2, en az NN, tutulan pay, `alpha = 6`) kütüphanede davranış olarak

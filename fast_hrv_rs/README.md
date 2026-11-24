@@ -208,7 +208,7 @@ How it works (`exclusion` module docs have the details):
    midpoint, so the ectopic dRR no longer inflate the thresholds; flags away from the ectopic beats become
    suspects. The copy is only used for detection.
 4. **NN mask:** an interval is invalid if it is adjacent to an ectopic, suspect or caller-marked
-   disagreement beat, touches an inserted beat, spans a removed beat (`exclude_inserted_removed`, default on)
+   disagreement beat, touches an inserted beat, spans a removed beat (only with `exclude_inserted_removed`, default off since 0.6.1)
    or crosses a physiological split (`physiological_rr_s`, default off). Gap-free segments are processed
    separately (`classify_segments`, `concat_nn`).
 

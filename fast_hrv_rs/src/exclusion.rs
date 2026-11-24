@@ -39,8 +39,8 @@
 //!    make their beat a suspect (stage 2). **No output beat moves.**
 //! 4. **NN validity:** the NN interval between beats `k` and `k+1` is invalid if either beat is
 //!    ectopic, suspect, or marked by the caller's primary/secondary disagreement, if it crosses a
-//!    physiological split, and (with [`ExclusionParams::exclude_inserted_removed`], default) if
-//!    either beat was inserted or a removed beat lies inside it. Gaps between segments are handled by
+//!    physiological split, and (only with [`ExclusionParams::exclude_inserted_removed`], default off)
+//!    if either beat was inserted or a removed beat lies inside it. Gaps between segments are handled by
 //!    processing each gap-free segment separately ([`classify_segments`], [`concat_nn`]).
 //!
 //! # Artifact ratio ([`BeatExclusion::artifact_counts`])
@@ -80,7 +80,10 @@ pub struct ExclusionParams {
     /// 20 ms fiducial offset and below a 50 ms primary/secondary tolerance).
     pub suspect_move_s: f64,
     /// Invalidate the NN intervals touching an inserted beat or spanning a removed beat. Default
-    /// `true`. `false` reproduces the research reference, which kept them.
+    /// `false` (since 0.6.1): the interval spanning a removed extra beat is the true interval and a
+    /// missed beat is inserted at the midpoint with a small error, so excluding them removes data without
+    /// fixing an error; on injected data `true` never improved RMSSD accuracy and was slightly worse
+    /// with 1–2 % artifacts. `false` also matches the research reference.
     pub exclude_inserted_removed: bool,
     /// Physiological RR limits `(min, max)` in seconds (e.g. `(0.3, 2.0)`); `None` (default) = no
     /// limit.
@@ -95,7 +98,7 @@ impl Default for ExclusionParams {
             compensatory_factor: 0.5,
             two_stage: true,
             suspect_move_s: 0.030,
-            exclude_inserted_removed: true,
+            exclude_inserted_removed: false,
             physiological_rr_s: None,
         }
     }
@@ -838,7 +841,12 @@ mod tests {
         pos.remove(60); // missed
         let extra = (pos[150] + pos[151]) / 2.0 + 30.0;
         pos.insert(151, extra); // extra
-        let out = classify_beats(&pos, 512.0, &ExclusionParams::default(), None).unwrap();
+        // opt-in: exclude the intervals touching inserted / spanning removed beats
+        let excl = ExclusionParams {
+            exclude_inserted_removed: true,
+            ..Default::default()
+        };
+        let out = classify_beats(&pos, 512.0, &excl, None).unwrap();
         assert_eq!(out.input_classes[59], BeatClass::Missed);
         assert_eq!(out.input_classes[151], BeatClass::Extra);
         let c = out.artifact_counts();
@@ -850,13 +858,12 @@ mod tests {
         let k = out.input_to_output[150].unwrap();
         assert_eq!(out.input_to_output[152], Some(k + 1));
         assert!(!out.nn_valid[k]);
-        // without exclude_inserted_removed they stay valid
-        let p = ExclusionParams {
-            exclude_inserted_removed: false,
-            ..Default::default()
-        };
-        let out2 = classify_beats(&pos, 512.0, &p, None).unwrap();
+        // default (since 0.6.1): they stay valid, and the artifacts are still counted
+        let out2 = classify_beats(&pos, 512.0, &ExclusionParams::default(), None).unwrap();
+        assert!(!ExclusionParams::default().exclude_inserted_removed);
         assert!(out2.nn_valid[k] && out2.nn_valid[ins - 1]);
+        let c2 = out2.artifact_counts();
+        assert_eq!((c2.inserted, c2.removed), (1, 1));
     }
 
     #[test]

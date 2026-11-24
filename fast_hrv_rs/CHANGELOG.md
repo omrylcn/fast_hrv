@@ -2,6 +2,15 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] - unreleased
+
+### Changed
+- `ExclusionParams::exclude_inserted_removed` now defaults to `false`. Measured on a real wearable
+  recording set and on injected synthetic data: coverage identical, and `true` never improved RMSSD
+  accuracy (slightly worse with 1–2 % artifacts, e.g. 60 s p90 7.9 % vs 7.1 %), because the interval
+  spanning a removed extra beat is the true interval and an inserted beat sits at the midpoint with a
+  small error. Set it to `true` explicitly to get the 0.6.0 behaviour.
+
 ## [0.6.0] - unreleased
 
 ### Added
