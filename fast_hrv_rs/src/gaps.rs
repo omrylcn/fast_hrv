@@ -64,9 +64,7 @@ fn split_indices(
         if in_gap(t) {
             continue;
         }
-        if let Some(p) = prev
-            && (crosses(p, t) || max_rr.is_some_and(|m| t - p > m))
-        {
+        if prev.is_some_and(|p| crosses(p, t) || max_rr.is_some_and(|m| t - p > m)) {
             segments.push(Vec::new());
         }
         segments.last_mut().unwrap().push(i);

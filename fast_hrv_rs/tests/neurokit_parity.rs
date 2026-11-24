@@ -177,9 +177,7 @@ fn hrv_metrics_match_neurokit() {
                     rel * 100.0
                 );
             }
-            if let Class::Tol(tol, _) = cls
-                && rel > tol
-            {
+            if matches!(cls, Class::Tol(tol, _) if rel > tol) {
                 failures.push(format!(
                     "{name}: {metric} fast-hrv={got:.9} neurokit={expected:.9} diff={:.3}%",
                     rel * 100.0

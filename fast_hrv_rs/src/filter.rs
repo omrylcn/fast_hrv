@@ -548,6 +548,29 @@ pub fn sosfilt_zi(sos: &[SosSection]) -> Vec<[f64; 2]> {
         .collect()
 }
 
+/// Run the cascade sample by sample (all sections per sample, like SciPy's `sosfilt`). Each section
+/// performs exactly the same operations as [`SosSection::process_inplace`], so the result does not
+/// depend on how the input is split into packets; the sample-major order lets the CPU overlap the
+/// sections' recursions.
+fn cascade_inplace(sos: &[SosSection], x: &mut [f64], state: &mut [[f64; 2]]) {
+    match sos.len() {
+        0 => {}
+        1 => sos[0].process_inplace(x, &mut state[0]),
+        _ => {
+            for v in x.iter_mut() {
+                let mut xi = *v;
+                for (s, st) in sos.iter().zip(state.iter_mut()) {
+                    let y = s.b0 * xi + st[0];
+                    st[0] = s.b1 * xi - s.a1 * y + st[1];
+                    st[1] = s.b2 * xi - s.a2 * y;
+                    xi = y;
+                }
+                *v = xi;
+            }
+        }
+    }
+}
+
 /// Causal filtering through the cascade. `zi` (one `[z1, z2]` per section) is the initial state
 /// (zero if `None`). Returns the output and the final state.
 pub fn sosfilt(
@@ -560,9 +583,7 @@ pub fn sosfilt(
         Some(z) => z.to_vec(),
         None => vec![[0.0; 2]; sos.len()],
     };
-    for (s, st) in sos.iter().zip(state.iter_mut()) {
-        s.process_inplace(&mut y, st);
-    }
+    cascade_inplace(sos, &mut y, &mut state);
     (y, state)
 }
 
@@ -812,9 +833,7 @@ impl SosFilter {
         if !self.started {
             self.start(x[0]);
         }
-        for (s, st) in self.sos.iter().zip(self.state.iter_mut()) {
-            s.process_inplace(x, st);
-        }
+        cascade_inplace(&self.sos, x, &mut self.state);
     }
 
     /// Filter one packet and return the output.
