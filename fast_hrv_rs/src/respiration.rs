@@ -46,8 +46,8 @@ pub struct RespirationConfig {
     pub band_hz: (f64, f64),
     /// Smallest window (s) accepted. Default 30.
     pub min_window_s: f64,
-    /// A modulation is usable when its spectral peak holds at least this share of the band power.
-    /// Default 0.15.
+    /// A modulation is usable when its spectral peak (±1/T) holds at least this share of the band
+    /// power. Default 0.25 (≈ 3× the white-noise share in a 60 s window).
     pub min_peak_share: f64,
     /// AM and FM estimates must agree within this (breaths/min). Default 4 (Karlen 2013).
     pub max_disagreement_bpm: f64,
@@ -58,7 +58,7 @@ impl Default for RespirationConfig {
         Self {
             band_hz: (0.1, 0.5),
             min_window_s: 30.0,
-            min_peak_share: 0.15,
+            min_peak_share: 0.25,
             max_disagreement_bpm: 4.0,
         }
     }
@@ -70,7 +70,8 @@ impl Default for RespirationConfig {
 pub struct ModulationEstimate {
     /// Breaths per minute at the spectral peak (`NaN` if the series is unusable).
     pub rate_bpm: f64,
-    /// Share of the band power in the peak (±1 grid step around it), 0–1.
+    /// Share of the band power within ±1/T of the peak (the main lobe of a sinusoid), 0–1. White
+    /// noise gives about (2/T) / band width (≈ 0.08 for 60 s and 0.1–0.5 Hz).
     pub peak_share: f64,
 }
 
@@ -135,8 +136,9 @@ pub fn modulation_rate(t: &[f64], y: &[f64], band: (f64, f64)) -> ModulationEsti
     } else {
         freqs[imax]
     };
-    let lo = imax.saturating_sub(1);
-    let hi = (imax + 1).min(p.len() - 1);
+    // main lobe of a sinusoid in a window of length T: ±1/T = ±8 grid steps of 1/(8T)
+    let lo = imax.saturating_sub(8);
+    let hi = (imax + 8).min(p.len() - 1);
     let share = p[lo..=hi].iter().sum::<f64>() / total;
     ModulationEstimate {
         rate_bpm: f * 60.0,

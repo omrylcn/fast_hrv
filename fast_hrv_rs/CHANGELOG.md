@@ -9,8 +9,9 @@ All notable changes to this crate. The format follows [Keep a Changelog](https:/
   PR baseline), `modulation_rate` (Lomb–Scargle peak in 0.1–0.5 Hz on the uneven beat series),
   `respiratory_rate` (amplitude + RR modulation, smart fusion: mean when they agree within 4 breaths/min,
   otherwise invalid; Karlen 2013), `hf_band_for` (HF band centred on the breathing rate).
-  Synthetic ECG 9–22/min: error ≤ 0.01/min. NeuroKit2 ECGSYN (15/min): 4 of 6 windows valid, error ≤ 0.6/min,
-  the others rejected (no wrong value).
+  Modulation quality = share of the band power within ±1/T of the peak (default ≥ 0.25, ≈ 3× white noise).
+  Synthetic ECG 9–22/min: error ≤ 0.01/min. NeuroKit2 ECGSYN (15/min): 5 of 6 windows valid, error ≤ 0.7/min,
+  the other rejected (no wrong value). Not yet validated against a reference respiration signal.
 
 ## [0.7.0] - unreleased
 
