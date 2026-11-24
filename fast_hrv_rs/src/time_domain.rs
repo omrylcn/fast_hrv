@@ -14,6 +14,8 @@ pub struct TimeDomain {
     pub sdnn: f64,
     /// Ardışık farkların karekök ortalaması (ms)
     pub rmssd: f64,
+    /// ln(RMSSD) (RMSSD in ms); the usual scale for statistics and baselines
+    pub ln_rmssd: f64,
     /// Ardışık farkların standart sapması (ms)
     pub sdsd: f64,
     /// |fark| > 50 ms olan ardışık çiftlerin yüzdesi
@@ -159,6 +161,7 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
             mean_nn: nan,
             sdnn: nan,
             rmssd: nan,
+            ln_rmssd: nan,
             sdsd: nan,
             pnn50: nan,
             pnn20: nan,
@@ -192,6 +195,7 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
         mean_nn,
         sdnn,
         rmssd,
+        ln_rmssd: if rmssd > 0.0 { rmssd.ln() } else { nan },
         sdsd: compute_sdsd(rri),
         pnn50: compute_pnn50(rri),
         pnn20: compute_pnn20(rri),
@@ -283,8 +287,14 @@ pub fn time_domain_masked(nn_ms: &[f64], valid: &[bool]) -> MaskedTimeDomain {
         time.pnn50 = (d.iter().filter(|x| x.abs() > 50.0).count() as f64 / n) * 100.0;
         time.pnn20 = (d.iter().filter(|x| x.abs() > 20.0).count() as f64 / n) * 100.0;
         time.cvsd = time.rmssd / time.mean_nn;
+        time.ln_rmssd = if time.rmssd > 0.0 {
+            time.rmssd.ln()
+        } else {
+            f64::NAN
+        };
     } else {
         time.rmssd = f64::NAN;
+        time.ln_rmssd = f64::NAN;
         time.sdsd = f64::NAN;
         time.pnn50 = f64::NAN;
         time.pnn20 = f64::NAN;

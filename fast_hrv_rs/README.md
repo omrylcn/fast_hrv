@@ -262,10 +262,21 @@ let accept = w.artifact_ratio() <= 0.02 && w.kept_nn >= 40 && w.kept_share() >= 
 
 | Group | Metrics |
 |---|---|
-| Time domain | MeanNN, SDNN, RMSSD, SDSD, pNN50, pNN20, MedianNN, MadNN, IQRNN, MinNN, MaxNN, CVNN, CVSD, MeanHR, SDHR, HTI, TINN |
-| Frequency domain (Welch, 4 Hz cubic-spline resampling) | VLF, LF, HF, total power, LF/HF, LFnu, HFnu, LF peak, HF peak |
+| Time domain | MeanNN, SDNN, RMSSD, lnRMSSD, SDSD, pNN50, pNN20, MedianNN, MadNN, IQRNN, MinNN, MaxNN, CVNN, CVSD, MeanHR, SDHR, HTI, TINN |
+| Frequency domain: Welch on 4 Hz cubic-spline resampling (`frequency_domain`), or Lomb–Scargle on the uneven beat times (`frequency_domain_lomb`) | VLF, LF, HF, lnHF, total power, LF/HF, LFnu, HFnu, LF peak, HF peak |
 | Nonlinear | SD1, SD2, SD1/SD2, CSI, CVI, SampEn, ApEn, DFA α1, DFA α2 |
 | Asymmetry | GI, PI, SD1d, SD1a, C1d, C1a |
+| Fragmentation (Costa 2017, NeuroKit2 definitions) | PIP, IALS, PSS, PAS |
+
+**Lomb–Scargle** (`frequency_domain_lomb(times_s, nn_ms, &opts)`) needs no interpolation: pass only the
+valid intervals at their beat times (e.g. after the exclusion mode, or with short gaps) and nothing is
+filled in. Classical periodogram, density scaled so that a sine of amplitude A gives A²/2 (as Welch);
+grid step 1 / (5 · T) up to 0.5 Hz; same bands, minimum durations and outputs as Welch. The two estimators
+agree within ~15 % on gap-free series; compare values only within one method. About 0.7 ms per 5 min window.
+
+**Window rules per metric:** `METRICS` / `metric_info("lf_hf")` give, for every field, the shortest
+(`min_s`) and the recommended (`recommended_s`) resting recording length with the source of the numbers, so
+an application can read its window rules from the library instead of copying them.
 
 Minimum data (otherwise the metric is `NaN`): time domain ≥ 3 intervals; frequency domain per band
 (sum of RR): HF ≥ 60 s, LF ≥ 120 s, VLF ≥ 300 s (configurable, `FrequencyOptions`); entropy/DFA ≥ 16
@@ -300,6 +311,9 @@ SciPy 1.18.1, NumPy 2.5.5, pandas 3.1.1.
 | MeanNN, SDNN, RMSSD, SDSD, Median, MAD, IQR, Min, Max, CVNN, CVSD, HTI, SD1, SD2, SD1/SD2, CSI, CVI, SampEn, ApEn, GI, PI, SD1d/a, C1d/a | `nk.hrv_time` / `hrv_nonlinear` (same R-peaks) | ≤ 3.3e-14 relative |
 | pNN50 / pNN20 | NeuroKit divides by the number of RR intervals, fast-hrv by the number of differences (Task Force) | identical after rescaling |
 | LF, HF, LF/HF, LFnu (records ≥ 5 min) | `nk.hrv_frequency(normalize=False)` | ≤ 24 % observed, test tolerance 30 % (different interpolation and Welch settings) |
+| lnHF | `nk.hrv_frequency` `HRV_LnHF` | ≤ 2.0 % observed (same method difference as HF, on the log scale) |
+| PIP, IALS, PSS, PAS | `nk.hrv_nonlinear` | ≤ 1.4e-16 (identical definitions) |
+| Lomb–Scargle periodogram (4 series, 120–600 s, with 0–10 % dropped intervals) | `astropy.timeseries.LombScargle(fit_mean=False, normalization="psd")` 8.0.3 (`tools/lomb_reference.py`) | ≤ 1e-9 of the peak |
 | VLF, TINN, DFA α1/α2 | — | not comparable (different definitions; see `tests/neurokit_parity.rs`) |
 
 Regenerate the references with `python tools/neurokit_reference.py` (and `filter_reference.py`,

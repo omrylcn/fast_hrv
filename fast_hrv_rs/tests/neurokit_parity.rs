@@ -76,6 +76,7 @@ fn field(r: &HrvReport, n_rr: usize, path: &str) -> Option<f64> {
         "frequency.lf" => f.lf,
         "frequency.hf" => f.hf,
         "frequency.lf_hf" => f.lf_hf,
+        "frequency.lnhf" => f.lnhf,
         "frequency.lfnu_frac" => f.lfnu / 100.0,
         "nonlinear.sd1" => n.sd1,
         "nonlinear.sd2" => n.sd2,
@@ -92,6 +93,10 @@ fn field(r: &HrvReport, n_rr: usize, path: &str) -> Option<f64> {
         "asymmetry.sd1a" => a.sd1a,
         "asymmetry.c1d" => a.c1d,
         "asymmetry.c1a" => a.c1a,
+        "fragmentation.pip" => r.fragmentation.pip,
+        "fragmentation.ials" => r.fragmentation.ials,
+        "fragmentation.pss" => r.fragmentation.pss,
+        "fragmentation.pas" => r.fragmentation.pas,
         _ => return None,
     })
 }
@@ -112,6 +117,10 @@ fn class(path: &str, duration_s: f64) -> Class {
         ),
         p if p.starts_with("frequency.") && duration_s < 290.0 => Class::ReportOnly(
             "records < 5 min: 64 s Welch segments (fast-hrv) vs N/2 segments (NK) give few, different averages",
+        ),
+        "frequency.lnhf" => Class::Tol(
+            0.05,
+            "ln of HF: the HF method difference (spline + Welch vs NK) shrinks on the log scale",
         ),
         "frequency.lf" | "frequency.hf" | "frequency.lf_hf" | "frequency.lfnu_frac" => Class::Tol(
             0.30,

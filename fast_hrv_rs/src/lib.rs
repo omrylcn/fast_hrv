@@ -36,9 +36,11 @@ pub mod ecg;
 pub mod error;
 pub mod exclusion;
 pub mod filter;
+pub mod fragmentation;
 pub mod frequency;
 pub mod gaps;
 pub mod hrv;
+pub mod metrics;
 pub mod peaks;
 pub mod report;
 pub mod sqi;
@@ -65,13 +67,16 @@ pub use exclusion::{
     ArtifactCounts, BeatClass, BeatExclusion, BeatFlags, ExclusionParams, ExclusionSummary,
     RemovalReason, RemovedBeat, classify_beats, classify_peaks, classify_segments, concat_nn,
 };
+pub use fragmentation::{Fragmentation, fragmentation};
 pub use frequency::{
-    FrequencyDomain, FrequencyOptions, frequency_domain, frequency_domain_with, welch,
+    FrequencyDomain, FrequencyOptions, frequency_domain, frequency_domain_lomb,
+    frequency_domain_with, lomb_scargle, welch,
 };
 pub use gaps::{
     Gap, RrSegment, fix_peaks_segmented, fix_positions_segmented, rri_with_gaps, split_at_gaps,
 };
 pub use hrv::*;
+pub use metrics::{METRICS, MetricInfo, metric_info};
 pub use peaks::{
     Artifacts, BeatStatus, Corrections, KubiosMidpoint, KubiosOutput, KubiosParams,
     KubiosPositions, detect_artifacts, ecg_peaks, find_peaks, find_peaks_default, fix_peaks,

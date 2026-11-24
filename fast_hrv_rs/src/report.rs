@@ -53,6 +53,8 @@ pub struct HrvReport {
     pub frequency: FrequencyDomain,
     pub nonlinear: NonLinear,
     pub asymmetry: Asymmetry,
+    /// Heart rate fragmentation (Costa 2017; NeuroKit2 definitions).
+    pub fragmentation: crate::fragmentation::Fragmentation,
 }
 
 /// NN aralıklarından (ms) bütün metrikler. Kısa kayıtlarda hesaplanamayanlar NaN döner:
@@ -101,6 +103,7 @@ pub fn hrv(rri: &[f64]) -> HrvReport {
             c1d: asym.as_ref().map_or(nan, |a| a.c1d),
             c1a: asym.as_ref().map_or(nan, |a| a.c1a),
         },
+        fragmentation: crate::fragmentation::fragmentation(rri),
     }
 }
 

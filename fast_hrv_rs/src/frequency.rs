@@ -1,4 +1,5 @@
-//! Frekans alanı HRV metrikleri (Welch yöntemi).
+//! Frekans alanı HRV metrikleri: Welch (varsayılan, eşit aralıklı yeniden örnekleme) ve
+//! Lomb–Scargle ([`frequency_domain_lomb`], düzensiz aralıklı NN için).
 //!
 //! Adımlar (Task Force 1996 / NeuroKit2 ile aynı mantık):
 //! 1. RR aralıklarından zaman ekseni (atımların zamanı) çıkarılır.
@@ -29,6 +30,8 @@ pub struct FrequencyDomain {
     /// VLF + LF + HF (ms²)
     pub total_power: f64,
     pub lf_hf: f64,
+    /// ln(HF) (HF in ms²), NeuroKit2 `HRV_LnHF`
+    pub lnhf: f64,
     /// Normalize güçler (%): LF / (LF + HF), HF / (LF + HF)
     pub lfnu: f64,
     pub hfnu: f64,
@@ -46,6 +49,7 @@ impl FrequencyDomain {
             hf: n,
             total_power: n,
             lf_hf: n,
+            lnhf: n,
             lfnu: n,
             hfnu: n,
             lf_peak: n,
@@ -285,11 +289,16 @@ pub fn frequency_domain_with(rri: &[f64], opts: &FrequencyOptions) -> FrequencyD
     let vlf = band(VLF, opts.min_duration_vlf_s);
     let lf = band(LF, opts.min_duration_lf_s);
     let hf = band(HF, opts.min_duration_hf_s);
+    bands_to_domain(&freqs, &psd, vlf, lf, hf)
+}
+
+/// Builds the result from the band powers (shared by Welch and Lomb–Scargle).
+fn bands_to_domain(freqs: &[f64], psd: &[f64], vlf: f64, lf: f64, hf: f64) -> FrequencyDomain {
     let positive = |p: f64| p.is_finite() && p > 0.0;
     let lfhf_sum = lf + hf;
     let peak = |p: f64, b: (f64, f64)| {
         if positive(p) {
-            band_peak(&freqs, &psd, b)
+            band_peak(freqs, psd, b)
         } else {
             f64::NAN
         }
@@ -298,6 +307,7 @@ pub fn frequency_domain_with(rri: &[f64], opts: &FrequencyOptions) -> FrequencyD
         vlf,
         lf,
         hf,
+        lnhf: if positive(hf) { hf.ln() } else { f64::NAN },
         total_power: vlf + lf + hf,
         lf_hf: if positive(hf) && lf.is_finite() {
             lf / hf
@@ -317,6 +327,142 @@ pub fn frequency_domain_with(rri: &[f64], opts: &FrequencyOptions) -> FrequencyD
         lf_peak: peak(lf, LF),
         hf_peak: peak(hf, HF),
     }
+}
+
+/// Oversampling of the Lomb–Scargle frequency grid: step = 1 / (`LOMB_OVERSAMPLE` · T) (astropy's
+/// `samples_per_peak` default).
+pub const LOMB_OVERSAMPLE: f64 = 5.0;
+/// Highest frequency evaluated by [`frequency_domain_lomb`] (Hz).
+pub const LOMB_MAX_HZ: f64 = 0.5;
+
+/// One-sided Lomb–Scargle power spectral density of `y` observed at times `t` (s), evaluated at
+/// `freqs` (Hz, > 0), in units of y²/Hz.
+///
+/// Classical periodogram (Lomb 1976; Scargle 1982) of the mean-removed series, with the time offset τ
+/// per frequency. With `P(f)` the classical value (astropy `normalization="psd"`, `fit_mean=False`),
+/// the density is `2 · (T / N) · P(f)` (T = time span, N = samples), so that, as for Welch, a sine of
+/// amplitude A contributes A² / 2 to the integrated band power. Uneven sampling needs no
+/// interpolation: excluded or missing intervals are simply absent.
+///
+/// `t` must be strictly increasing and finite; otherwise (or with fewer than 3 samples) every value is
+/// NaN. Cost O(N · F) with a trigonometric recurrence (no trig call in the inner loop).
+pub fn lomb_scargle(t: &[f64], y: &[f64], freqs: &[f64]) -> Vec<f64> {
+    let n = t.len();
+    if n < 3
+        || y.len() != n
+        || t.windows(2).any(|w| w[1] <= w[0])
+        || t.iter().chain(y).any(|v| !v.is_finite())
+    {
+        return vec![f64::NAN; freqs.len()];
+    }
+    let mean = y.iter().sum::<f64>() / n as f64;
+    let span = t[n - 1] - t[0];
+    let t0 = t[0];
+    let f = freqs.len();
+    let (mut c, mut s, mut cc, mut cs) = (vec![0.0; f], vec![0.0; f], vec![0.0; f], vec![0.0; f]);
+    // frequencies on a uniform grid allow the recurrence; otherwise evaluate directly
+    let uniform = f >= 2 && {
+        let d = freqs[1] - freqs[0];
+        freqs
+            .windows(2)
+            .all(|w| ((w[1] - w[0]) - d).abs() <= 1e-9 * d.abs().max(1e-12))
+    };
+    for i in 0..n {
+        let yi = y[i] - mean;
+        let ti = t[i] - t0;
+        if uniform {
+            let w0 = 2.0 * PI * freqs[0] * ti;
+            let dw = 2.0 * PI * (freqs[1] - freqs[0]) * ti;
+            let (mut zr, mut zi) = (w0.cos(), w0.sin());
+            let (rr, ri) = (dw.cos(), dw.sin());
+            for k in 0..f {
+                c[k] += yi * zr;
+                s[k] += yi * zi;
+                cc[k] += zr * zr;
+                cs[k] += zr * zi;
+                let nr = zr * rr - zi * ri;
+                zi = zr * ri + zi * rr;
+                zr = nr;
+            }
+        } else {
+            for k in 0..f {
+                let w = 2.0 * PI * freqs[k] * ti;
+                let (zr, zi) = (w.cos(), w.sin());
+                c[k] += yi * zr;
+                s[k] += yi * zi;
+                cc[k] += zr * zr;
+                cs[k] += zr * zi;
+            }
+        }
+    }
+    let scale = 2.0 * span / n as f64;
+    (0..f)
+        .map(|k| {
+            let ss = n as f64 - cc[k];
+            // time offset: tan(2ωτ) = 2·CS / (CC − SS)
+            let wt = 0.5 * (2.0 * cs[k]).atan2(cc[k] - ss);
+            let (ct, st) = (wt.cos(), wt.sin());
+            let yc = c[k] * ct + s[k] * st;
+            let ys = s[k] * ct - c[k] * st;
+            let cct = cc[k] * ct * ct + 2.0 * cs[k] * ct * st + ss * st * st;
+            let sst = ss * ct * ct - 2.0 * cs[k] * ct * st + cc[k] * st * st;
+            let a = if cct > 0.0 { yc * yc / cct } else { 0.0 };
+            let b = if sst > 0.0 { ys * ys / sst } else { 0.0 };
+            0.5 * (a + b) * scale
+        })
+        .collect()
+}
+
+/// Frequency-domain metrics with the Lomb–Scargle periodogram, for **unevenly spaced** NN intervals:
+/// `nn_ms[i]` is observed at `times_s[i]` (e.g. the time of the beat that ends the interval).
+///
+/// Unlike [`frequency_domain_with`] (cubic-spline resampling + Welch), intervals removed by the
+/// exclusion mode or lost in short gaps are simply left out; nothing is interpolated. Pass only the
+/// valid intervals (NaN entries are dropped). Grid: step 1 / (5 · T) up to 0.5 Hz; the bands, the
+/// per-band minimum durations (measured on the time span) and the outputs are the same as Welch's.
+/// The two estimators are not identical; compare values only within one method.
+pub fn frequency_domain_lomb(
+    times_s: &[f64],
+    nn_ms: &[f64],
+    opts: &FrequencyOptions,
+) -> FrequencyDomain {
+    if times_s.len() != nn_ms.len() {
+        return FrequencyDomain::nan();
+    }
+    let (t, y): (Vec<f64>, Vec<f64>) = times_s
+        .iter()
+        .zip(nn_ms)
+        .filter(|(a, b)| a.is_finite() && b.is_finite() && **b > 0.0)
+        .map(|(a, b)| (*a, *b))
+        .unzip();
+    if t.len() < 10 || t.windows(2).any(|w| w[1] <= w[0]) {
+        return FrequencyDomain::nan();
+    }
+    let span = t[t.len() - 1] - t[0];
+    let min_any = opts
+        .min_duration_hf_s
+        .min(opts.min_duration_lf_s)
+        .min(opts.min_duration_vlf_s);
+    if span < min_any {
+        return FrequencyDomain::nan();
+    }
+    let df = 1.0 / (LOMB_OVERSAMPLE * span);
+    let nf = (LOMB_MAX_HZ / df).floor() as usize;
+    let freqs: Vec<f64> = (1..=nf).map(|k| k as f64 * df).collect();
+    let psd = lomb_scargle(&t, &y, &freqs);
+    let mean_rr = y.iter().sum::<f64>() / y.len() as f64;
+    let floor = POWER_FLOOR_REL * mean_rr * mean_rr;
+    let band = |b: (f64, f64), min_s: f64| -> f64 {
+        if span < min_s {
+            return f64::NAN;
+        }
+        let p = band_power(&freqs, &psd, b);
+        if p <= floor { 0.0 } else { p }
+    };
+    let vlf = band(VLF, opts.min_duration_vlf_s);
+    let lf = band(LF, opts.min_duration_lf_s);
+    let hf = band(HF, opts.min_duration_hf_s);
+    bands_to_domain(&freqs, &psd, vlf, lf, hf)
 }
 
 #[cfg(test)]

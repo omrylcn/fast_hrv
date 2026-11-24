@@ -2,6 +2,22 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - unreleased
+
+### Added
+- `frequency_domain_lomb(times_s, nn_ms, &FrequencyOptions)` and `lomb_scargle(t, y, freqs)`:
+  Lomb–Scargle frequency domain for unevenly spaced NN (intervals removed by the exclusion mode or short
+  gaps are left out, nothing is interpolated). Matches astropy `LombScargle(fit_mean=False,
+  normalization="psd")` to 1e-9 of the peak; density scaled like Welch (a sine of amplitude A → A²/2).
+- Heart rate fragmentation (Costa 2017): `fragmentation(nn_ms) -> Fragmentation { pip, ials, pss, pas }`,
+  also in `HrvReport::fragmentation`. NeuroKit2 definitions (identical to 1.4e-16).
+- `TimeDomain::ln_rmssd` (also in `time_domain_masked`) and `FrequencyDomain::lnhf` (NeuroKit2 `LnHF`).
+- `metrics::METRICS` / `metric_info(name)`: shortest and recommended resting recording length per metric,
+  with the source, so applications read their window rules from one place.
+
+### Changed (breaking for struct literals)
+- New public fields: `TimeDomain::ln_rmssd`, `FrequencyDomain::lnhf`, `HrvReport::fragmentation`.
+
 ## [0.6.1] - unreleased
 
 ### Documentation
