@@ -117,6 +117,33 @@ is in [`examples/streaming.rs`](examples/streaming.rs): `cargo run --release --e
 with the zero-phase filter shifts peaks by ~8–10 ms; on noisy real recordings 16–26 % of them then no
 longer match the live peaks within 50 ms.
 
+## Artifact correction (Kubios)
+
+`fix_peaks_with(peaks, fs, &KubiosParams::default())` runs the Lipponen–Tarvainen (2019) detection and
+correction as NeuroKit2 `signal_fixpeaks(method="Kubios")` does (same output on the fixtures), iterating
+while the number of flags decreases. `KubiosOutput` holds the corrected peaks, the artifact flags
+(`artifacts`, cumulative over passes, and `passes`) and **`corrections`**: what really changed, decided by
+comparing the output with the input.
+
+- `corrections.status[j]` per output beat: `Unchanged` (same position as an input beat, also when it was
+  flagged and ended where it started), `Moved` (ectopic or long/short correction), `Inserted` (missed beat);
+  `corrections.removed` counts deleted (extra) input beats, which have no output beat;
+  `input_to_output` / `output_to_input()` map between the two.
+- **Gate on `changed_ratio()`** = (moved + inserted) / output beats, with removed beats reported separately
+  (`removed_count()`). Do **not** use `artifacts.total_count() / n`: it counts flags of every pass,
+  including flags that change nothing; on real wearable data it was 2–5× the share of beats actually changed.
+- Segmented recordings: `gaps::segment_changed_counts`, `total_changed`, `total_removed`,
+  `overall_changed_ratio` over the outputs of `fix_peaks_segmented`.
+- Kubios has known blind spots that a ratio cannot show (a compensated premature beat moves two beats; at
+  ~15 % artifacts the quartile thresholds inflate and it reports almost nothing): combine the ratio with a
+  residual RR check and signal-quality gates.
+
+```rust
+let out = fast_hrv::fix_peaks_with(&peaks, 512.0, &fast_hrv::KubiosParams::default())?;
+let ratio = out.changed_ratio();            // share of output beats actually changed
+let removed = out.corrections.removed_count();
+```
+
 ## Gaps
 
 `gaps::split_at_gaps` / `rri_with_gaps` take R-peak sample indices plus `Gap { start, end }` markers

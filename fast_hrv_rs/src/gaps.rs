@@ -18,7 +18,7 @@
 //! different segments re-introduces successive differences across a gap.
 
 use crate::error::HrvError;
-use crate::peaks::{Artifacts, KubiosOutput, KubiosParams, fix_peaks_with};
+use crate::peaks::{Artifacts, Corrections, KubiosOutput, KubiosParams, fix_peaks_with};
 
 /// A gap: the half-open interval `[start, end)` in samples (same clock as the peaks) with no valid
 /// data. Peaks inside a gap are discarded. A zero-length gap (`start == end`) is a discontinuity
@@ -170,9 +170,41 @@ pub fn fix_peaks_segmented(
         .collect()
 }
 
-/// Total artifact count over segment results.
+/// Total artifact **flag** count over segment results ([`Artifacts::total_count`] summed).
+///
+/// Counts flags over all correction passes, including flags that changed nothing: **not** a
+/// corrected-beat count. For gating use [`total_changed`] / [`overall_changed_ratio`].
 pub fn total_artifacts(outputs: &[KubiosOutput]) -> usize {
     outputs.iter().map(|o| o.artifacts.total_count()).sum()
+}
+
+/// Output beats actually changed (moved + inserted) in each segment
+/// ([`Corrections::changed_count`]). Works on [`KubiosOutput`] and any other result exposing
+/// [`Corrections`].
+pub fn segment_changed_counts<T: AsRef<Corrections>>(outputs: &[T]) -> Vec<usize> {
+    outputs.iter().map(|o| o.as_ref().changed_count()).collect()
+}
+
+/// Output beats actually changed (moved + inserted), summed over segments.
+pub fn total_changed<T: AsRef<Corrections>>(outputs: &[T]) -> usize {
+    outputs.iter().map(|o| o.as_ref().changed_count()).sum()
+}
+
+/// Input beats removed (extra beats), summed over segments.
+pub fn total_removed<T: AsRef<Corrections>>(outputs: &[T]) -> usize {
+    outputs.iter().map(|o| o.as_ref().removed_count()).sum()
+}
+
+/// Share of output beats actually changed over all segments: total (moved + inserted) / total
+/// output beats (same definition as [`Corrections::changed_ratio`]; removed beats are reported by
+/// [`total_removed`]). `NaN` when there is no output beat.
+pub fn overall_changed_ratio<T: AsRef<Corrections>>(outputs: &[T]) -> f64 {
+    let n: usize = outputs.iter().map(|o| o.as_ref().n_output()).sum();
+    if n == 0 {
+        f64::NAN
+    } else {
+        total_changed(outputs) as f64 / n as f64
+    }
 }
 
 /// Artifacts of all segments (indices are per segment).
@@ -281,8 +313,33 @@ mod tests {
         .unwrap();
         let fixed = fix_peaks_segmented(&segs, fs, &KubiosParams::default()).unwrap();
         assert_eq!(total_artifacts(&fixed), 0);
+        assert_eq!(segment_changed_counts(&fixed), vec![0, 0]);
+        assert_eq!(overall_changed_ratio(&fixed), 0.0);
         let all: Vec<usize> = fixed.iter().flat_map(|o| o.peaks.clone()).collect();
         assert_eq!(all, peaks);
+    }
+
+    #[test]
+    fn segment_changed_counts_per_segment() {
+        let fs = 512.0;
+        let jitter = |start: usize| -> Vec<usize> {
+            (0..40)
+                .map(|i| start + i * 435 + (15.0 * (i as f64 * 0.7).sin()).round() as usize + 15)
+                .collect()
+        };
+        let mut a = jitter(100);
+        let b = jitter(a.last().unwrap() + 60 * 512);
+        // first segment: one beat displaced (moved back), second: clean
+        a[20] -= 150;
+        let fixed = fix_peaks_segmented(&[a.clone(), b], fs, &KubiosParams::default()).unwrap();
+        let counts = segment_changed_counts(&fixed);
+        assert!(counts[0] >= 1 && counts[1] == 0, "{counts:?}");
+        assert_eq!(total_changed(&fixed), counts[0]);
+        assert_eq!(total_removed(&fixed), 0);
+        let n: usize = fixed.iter().map(|o| o.peaks.len()).sum();
+        assert_eq!(overall_changed_ratio(&fixed), counts[0] as f64 / n as f64);
+        assert!(total_artifacts(&fixed) >= counts[0]);
+        assert!(overall_changed_ratio::<KubiosOutput>(&[]).is_nan());
     }
 
     #[test]

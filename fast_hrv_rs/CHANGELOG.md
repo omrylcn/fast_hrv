@@ -2,6 +2,24 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - unreleased
+
+### Added
+- Per-beat Kubios result: `KubiosOutput::corrections` (`Corrections`) with `status: Vec<BeatStatus>`
+  (`Unchanged` / `Moved` / `Inserted` for every output beat), `removed` (deleted extra beats),
+  `input_to_output`, and `n_output`, `n_input`, `moved_count`, `inserted_count`, `removed_count`,
+  `changed_count`, `changed_ratio`, `changed_mask`, `output_to_input`. Decided by comparing the final
+  peaks with the input: a beat flagged and then restored is `Unchanged`. `KubiosOutput::changed_count()`
+  / `changed_ratio()` shortcuts. Ratio definition: (moved + inserted) / output beats; removed separately.
+- `gaps::segment_changed_counts`, `total_changed`, `total_removed`, `overall_changed_ratio` (generic over
+  `AsRef<Corrections>`).
+
+### Changed
+- Docs: `Artifacts::total_count()` (and `gaps::total_artifacts`) count artifact **flags** over all passes,
+  including flags that change nothing; they are not a corrected-beat ratio. Use `changed_ratio()`.
+- `KubiosOutput` has a new public field `corrections` (breaking only for code that builds or
+  destructures `KubiosOutput` with all fields).
+
 ## [0.4.0] - unreleased
 
 ### Added

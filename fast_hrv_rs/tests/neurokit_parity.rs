@@ -359,3 +359,58 @@ fn kubios_matches_neurokit() {
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Corrected-beat counts on the NeuroKit2 Kubios fixtures: flags over all passes
+/// (`Artifacts::total_count`) vs beats actually changed (`Corrections`).
+#[test]
+fn kubios_changed_beats_vs_flags() {
+    let Some(r) = load("neurokit_kubios.json") else {
+        return;
+    };
+    let params = KubiosParams::default();
+    let (mut flags, mut changed, mut removed, mut beats) = (0, 0, 0, 0);
+    eprintln!("case: beats, flags (total_count), moved, inserted, removed, changed_ratio");
+    for case in r["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let fs = case["sampling_rate"].as_f64().unwrap();
+        let peaks = usizes(&case["peaks"]);
+        let out = fix_peaks_with(&peaks, fs, &params).unwrap();
+        let c = &out.corrections;
+        assert_eq!(out.peaks, usizes(&case["fixed"]), "{name}");
+        assert_eq!(c.n_output(), out.peaks.len());
+        assert_eq!(
+            out.peaks.len(),
+            peaks.len() - c.removed_count() + c.inserted_count(),
+            "{name}"
+        );
+        // every change needs a flag; flags that change nothing are not counted
+        assert!(
+            c.changed_count() + c.removed_count() <= out.artifacts.total_count(),
+            "{name}"
+        );
+        for (i, o) in c.input_to_output.iter().enumerate() {
+            if let Some(j) = *o {
+                let same = peaks[i] == out.peaks[j];
+                assert_eq!(
+                    same,
+                    c.status[j] == fast_hrv::BeatStatus::Unchanged,
+                    "{name}"
+                );
+            }
+        }
+        eprintln!(
+            "{name}: {}, {}, {}, {}, {}, {:.4}",
+            out.peaks.len(),
+            out.artifacts.total_count(),
+            c.moved_count(),
+            c.inserted_count(),
+            c.removed_count(),
+            out.changed_ratio()
+        );
+        flags += out.artifacts.total_count();
+        changed += c.changed_count();
+        removed += c.removed_count();
+        beats += out.peaks.len();
+    }
+    eprintln!("total: {beats} output beats, {flags} flags, {changed} changed + {removed} removed");
+}

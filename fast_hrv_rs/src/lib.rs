@@ -63,8 +63,8 @@ pub use frequency::{
 pub use gaps::{Gap, RrSegment, fix_peaks_segmented, rri_with_gaps, split_at_gaps};
 pub use hrv::*;
 pub use peaks::{
-    Artifacts, KubiosOutput, KubiosParams, detect_artifacts, ecg_peaks, find_peaks,
-    find_peaks_default, fix_peaks, fix_peaks_default, fix_peaks_with,
+    Artifacts, BeatStatus, Corrections, KubiosOutput, KubiosParams, detect_artifacts, ecg_peaks,
+    find_peaks, find_peaks_default, fix_peaks, fix_peaks_default, fix_peaks_with,
 };
 pub use report::{
     Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks, rri_from_positions, rri_from_times,

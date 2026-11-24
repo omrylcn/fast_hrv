@@ -403,6 +403,9 @@ pub fn find_peaks_default(ecg_cleaned: &[f64], sampling_rate: u32) -> Vec<usize>
 /// [`fix_peaks`] / [`fix_peaks_with`] the lists are **cumulative over all correction passes**:
 /// each index refers to the peak array as it was at the start of the pass that found it
 /// (see [`KubiosOutput::passes`] for the per-pass split).
+///
+/// These are **flags**, not corrected beats: see [`Artifacts::total_count`]. For the share of beats
+/// that the correction actually changed use [`Corrections`] ([`KubiosOutput::corrections`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Artifacts {
@@ -413,6 +416,15 @@ pub struct Artifacts {
 }
 
 impl Artifacts {
+    /// Number of artifact **flags** (ectopic + missed + extra + long/short).
+    ///
+    /// On the cumulative artifacts of [`fix_peaks_with`] this sums the flags of **every** correction
+    /// pass, including flags whose correction changed nothing (a beat moved to where it already was,
+    /// or moved in one pass and back in the next) and the same beat flagged again in a later pass.
+    /// It is therefore **not** a corrected-beat count, and `total_count() / n_beats` is **not** a
+    /// corrected-beat ratio (on real wearable data it was 2–5× the share of beats actually changed).
+    /// For gating on correction use [`Corrections::changed_count`] / [`Corrections::changed_ratio`]
+    /// (also [`KubiosOutput::changed_ratio`]).
     pub fn total_count(&self) -> usize {
         self.ectopic.len() + self.missed.len() + self.extra.len() + self.longshort.len()
     }
@@ -422,6 +434,124 @@ impl Artifacts {
         self.missed.extend_from_slice(&other.missed);
         self.extra.extend_from_slice(&other.extra);
         self.longshort.extend_from_slice(&other.longshort);
+    }
+}
+
+/// What the Kubios correction did to one **output** beat, decided by comparing the final output
+/// with the input (not from the flags).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum BeatStatus {
+    /// Same position as an input beat (bit-identical). A beat that was flagged but ends where it
+    /// started (e.g. moved in one pass and back in a later one) is `Unchanged`.
+    Unchanged,
+    /// An input beat shifted by an ectopic or long/short correction.
+    Moved,
+    /// A beat added by a missed-beat correction (no input beat).
+    Inserted,
+}
+
+/// Per-beat result of a Kubios correction: what really changed between input and output.
+///
+/// How it is decided: an output beat whose position equals an input position exactly is
+/// [`BeatStatus::Unchanged`] (input and output are both sorted; equal positions are paired in
+/// order). Each remaining output beat is [`BeatStatus::Moved`] if it descends from an input beat
+/// (tracked through all passes) that is not already paired, otherwise [`BeatStatus::Inserted`].
+/// Input beats left without an output beat are **removed** (extra-beat corrections).
+///
+/// Ratio definition (for gating): [`Corrections::changed_ratio`] = (moved + inserted) / number of
+/// **output** beats. Removed beats have no output beat and are reported separately
+/// ([`Corrections::removed`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Corrections {
+    /// Status of each output beat (same length as the corrected peaks).
+    pub status: Vec<BeatStatus>,
+    /// For each input beat, the index of its output beat, or `None` if it was removed.
+    pub input_to_output: Vec<Option<usize>>,
+    /// Number of input beats removed (extra beats); they have no output beat.
+    pub removed: usize,
+}
+
+impl Corrections {
+    /// No correction: every one of `n` beats unchanged.
+    fn identity(n: usize) -> Self {
+        Self {
+            status: vec![BeatStatus::Unchanged; n],
+            input_to_output: (0..n).map(Some).collect(),
+            removed: 0,
+        }
+    }
+
+    fn count(&self, s: BeatStatus) -> usize {
+        self.status.iter().filter(|&&x| x == s).count()
+    }
+
+    /// Number of output beats.
+    pub fn n_output(&self) -> usize {
+        self.status.len()
+    }
+
+    /// Number of input beats.
+    pub fn n_input(&self) -> usize {
+        self.input_to_output.len()
+    }
+
+    /// Output beats moved by an ectopic or long/short correction.
+    pub fn moved_count(&self) -> usize {
+        self.count(BeatStatus::Moved)
+    }
+
+    /// Output beats inserted by a missed-beat correction.
+    pub fn inserted_count(&self) -> usize {
+        self.count(BeatStatus::Inserted)
+    }
+
+    /// Input beats removed by an extra-beat correction (same as [`Corrections::removed`]).
+    pub fn removed_count(&self) -> usize {
+        self.removed
+    }
+
+    /// Output beats actually changed: moved + inserted (removed beats are not included, see
+    /// [`Corrections::removed_count`]).
+    pub fn changed_count(&self) -> usize {
+        self.status
+            .iter()
+            .filter(|&&s| s != BeatStatus::Unchanged)
+            .count()
+    }
+
+    /// Share of output beats actually changed: `(moved + inserted) / n_output`, in `[0, 1]`.
+    ///
+    /// This is the corrected-beat ratio to gate on (not [`Artifacts::total_count`], which counts
+    /// flags over all passes). Removed beats are reported separately ([`Corrections::removed_count`]).
+    /// `NaN` when there is no output beat.
+    pub fn changed_ratio(&self) -> f64 {
+        if self.status.is_empty() {
+            f64::NAN
+        } else {
+            self.changed_count() as f64 / self.status.len() as f64
+        }
+    }
+
+    /// `true` for each output beat that is moved or inserted.
+    pub fn changed_mask(&self) -> Vec<bool> {
+        self.status
+            .iter()
+            .map(|&s| s != BeatStatus::Unchanged)
+            .collect()
+    }
+
+    /// For each output beat, the index of the input beat it is (unchanged) or comes from (moved);
+    /// `None` for inserted beats. Inverse of [`Corrections::input_to_output`].
+    pub fn output_to_input(&self) -> Vec<Option<usize>> {
+        let mut out = vec![None; self.status.len()];
+        for (i, o) in self.input_to_output.iter().enumerate() {
+            if let Some(j) = *o {
+                out[j] = Some(i);
+            }
+        }
+        out
     }
 }
 
@@ -458,10 +588,31 @@ impl Default for KubiosParams {
 pub struct KubiosOutput {
     /// Corrected peak indices.
     pub peaks: Vec<usize>,
-    /// Artifacts of all applied passes, concatenated (cumulative count = `artifacts.total_count()`).
+    /// Artifact flags of all applied passes, concatenated. `artifacts.total_count()` counts flags,
+    /// not corrected beats; see [`KubiosOutput::corrections`].
     pub artifacts: Artifacts,
     /// Artifacts of each applied pass (indices refer to the peaks at the start of that pass).
     pub passes: Vec<Artifacts>,
+    /// Per-beat result (unchanged / moved / inserted, removed count, input → output mapping).
+    pub corrections: Corrections,
+}
+
+impl KubiosOutput {
+    /// Output beats actually changed (moved + inserted); see [`Corrections::changed_count`].
+    pub fn changed_count(&self) -> usize {
+        self.corrections.changed_count()
+    }
+
+    /// Share of output beats actually changed; see [`Corrections::changed_ratio`].
+    pub fn changed_ratio(&self) -> f64 {
+        self.corrections.changed_ratio()
+    }
+}
+
+impl AsRef<Corrections> for KubiosOutput {
+    fn as_ref(&self) -> &Corrections {
+        &self.corrections
+    }
 }
 
 /// NumPy's pairwise summation (`np.sum` / `np.mean` on float64), for bit-level parity.
@@ -702,19 +853,41 @@ fn classify_artifacts(
     artifacts
 }
 
+/// Peak position type of the generic Kubios core (integer sample indices). Only RR (`as_f64` differences) and ordering are needed; the midpoint rule is passed
+/// separately.
+trait PeakPos: Copy {
+    fn as_f64(self) -> f64;
+    fn cmp_pos(&self, other: &Self) -> std::cmp::Ordering;
+}
+
+impl PeakPos for usize {
+    #[inline]
+    fn as_f64(self) -> f64 {
+        self as f64
+    }
+    #[inline]
+    fn cmp_pos(&self, other: &Self) -> std::cmp::Ordering {
+        self.cmp(other)
+    }
+}
+
 /// One Kubios detection pass over strictly increasing `peaks` (NeuroKit2 `_find_artifacts`).
 ///
 /// Rolling quartiles and median follow pandas `rolling(..., center=True, min_periods=1)` exactly
 /// (shrinking windows at the series edges, linear interpolation), so short series (< 45 beats)
 /// behave like NeuroKit2.
 pub fn detect_artifacts(peaks: &[usize], sampling_rate: f64, params: &KubiosParams) -> Artifacts {
+    detect_core(peaks, sampling_rate, params)
+}
+
+fn detect_core<T: PeakPos>(peaks: &[T], sampling_rate: f64, params: &KubiosParams) -> Artifacts {
     let n = peaks.len();
     if n < 3 || !sampling_rate.is_finite() || sampling_rate <= 0.0 {
         return Artifacts::default();
     }
     let mut rr = vec![0.0; n];
     for i in 1..n {
-        rr[i] = (peaks[i] as f64 - peaks[i - 1] as f64) / sampling_rate;
+        rr[i] = (peaks[i].as_f64() - peaks[i - 1].as_f64()) / sampling_rate;
     }
     rr[0] = numpy_sum(&rr[1..]) / (n - 1) as f64;
 
@@ -774,7 +947,7 @@ fn update_indices(source_idcs: &[usize], update_idcs: &[usize], update: isize) -
 }
 
 /// Remove the (sorted, unique) indices `idcs` from `v`.
-fn remove_indices(v: &mut Vec<usize>, idcs: &[usize]) {
+fn remove_indices<X>(v: &mut Vec<X>, idcs: &[usize]) {
     let mut k = 0;
     let mut i = 0;
     v.retain(|_| {
@@ -787,10 +960,20 @@ fn remove_indices(v: &mut Vec<usize>, idcs: &[usize]) {
     });
 }
 
+/// Origin marker of a beat that has no input beat (inserted by a missed-beat correction).
+const INSERTED: usize = usize::MAX;
+
 /// Correct detected artifacts (NeuroKit2 `_correct_artifacts`): delete extra beats, insert missed
-/// beats, move ectopic and long/short beats to the midpoint of their neighbours.
-fn correct_artifacts(artifacts: &Artifacts, peaks: &[usize]) -> Vec<usize> {
-    let mut peaks_clean: Vec<usize> = peaks.to_vec();
+/// beats, move ectopic and long/short beats to the midpoint of their neighbours (`mid(prev, next)`).
+///
+/// Each beat carries the index of the input beat it descends from (`INSERTED` for new beats); a
+/// moved beat keeps its origin.
+fn correct_core<T: PeakPos>(
+    artifacts: &Artifacts,
+    peaks: &[(T, usize)],
+    mid: impl Fn(T, T) -> T,
+) -> Vec<(T, usize)> {
+    let mut peaks_clean: Vec<(T, usize)> = peaks.to_vec();
 
     let mut extra = artifacts.extra.clone();
     extra.sort_unstable();
@@ -816,9 +999,9 @@ fn correct_artifacts(artifacts: &Artifacts, peaks: &[usize]) -> Vec<usize> {
         valid.sort_unstable();
         valid.dedup();
         for &idx in valid.iter().rev() {
-            let prev = peaks_clean[idx - 1];
-            let next = peaks_clean[idx];
-            peaks_clean.insert(idx, prev + (next - prev) / 2);
+            let prev = peaks_clean[idx - 1].0;
+            let next = peaks_clean[idx].0;
+            peaks_clean.insert(idx, (mid(prev, next), INSERTED));
         }
         ectopic = update_indices(&valid, &ectopic, 1);
         longshort = update_indices(&valid, &longshort, 1);
@@ -835,19 +1018,108 @@ fn correct_artifacts(artifacts: &Artifacts, peaks: &[usize]) -> Vec<usize> {
         if valid.is_empty() {
             continue;
         }
-        let interp: Vec<usize> = valid
+        let interp: Vec<(T, usize)> = valid
             .iter()
             .map(|&idx| {
-                let (prev, next) = (peaks_clean[idx - 1], peaks_clean[idx + 1]);
-                prev + (next - prev) / 2
+                let (prev, next) = (peaks_clean[idx - 1].0, peaks_clean[idx + 1].0);
+                (mid(prev, next), peaks_clean[idx].1)
             })
             .collect();
         remove_indices(&mut peaks_clean, &valid);
         peaks_clean.extend(interp);
-        peaks_clean.sort();
+        // stable sort by position (as the previous integer `sort()`)
+        peaks_clean.sort_by(|a, b| a.0.cmp_pos(&b.0));
     }
 
     peaks_clean
+}
+
+/// Per-beat status of `output` (positions + origins) against `input` (see [`Corrections`]).
+fn compute_corrections<T: PeakPos>(input: &[T], output: &[(T, usize)]) -> Corrections {
+    let mut input_to_output: Vec<Option<usize>> = vec![None; input.len()];
+    let mut status = vec![BeatStatus::Inserted; output.len()];
+    // 1. exact position matches (both sequences sorted): unchanged
+    let (mut i, mut j) = (0, 0);
+    while i < input.len() && j < output.len() {
+        match input[i].cmp_pos(&output[j].0) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                input_to_output[i] = Some(j);
+                status[j] = BeatStatus::Unchanged;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    // 2. remaining output beats descending from a still unpaired input beat: moved
+    for (j, &(_, origin)) in output.iter().enumerate() {
+        if status[j] == BeatStatus::Unchanged || origin == INSERTED {
+            continue;
+        }
+        if input_to_output[origin].is_none() {
+            input_to_output[origin] = Some(j);
+            status[j] = BeatStatus::Moved;
+        }
+    }
+    let removed = input_to_output.iter().filter(|o| o.is_none()).count();
+    Corrections {
+        status,
+        input_to_output,
+        removed,
+    }
+}
+
+/// Generic Kubios loop (validated input): detection + correction, repeated while the number of
+/// flags decreases (`params.iterative`). Returns (positions, cumulative flags, per-pass flags,
+/// per-beat corrections).
+fn fix_core<T: PeakPos>(
+    peaks: &[T],
+    sampling_rate: f64,
+    params: &KubiosParams,
+    mid: impl Fn(T, T) -> T + Copy,
+) -> (Vec<T>, Artifacts, Vec<Artifacts>, Corrections) {
+    if peaks.len() < 3 {
+        return (
+            peaks.to_vec(),
+            Artifacts::default(),
+            Vec::new(),
+            Corrections::identity(peaks.len()),
+        );
+    }
+    let tagged: Vec<(T, usize)> = peaks.iter().copied().zip(0..).collect();
+    let first = detect_core(peaks, sampling_rate, params);
+    let mut clean = correct_core(&first, &tagged, mid);
+    let mut current = first.total_count();
+    let mut passes = vec![first];
+
+    if params.iterative {
+        let mut values: Vec<T> = Vec::with_capacity(clean.len());
+        loop {
+            values.clear();
+            values.extend(clean.iter().map(|p| p.0));
+            let next = detect_core(&values, sampling_rate, params);
+            let count = next.total_count();
+            if count >= current {
+                break;
+            }
+            current = count;
+            clean = correct_core(&next, &clean, mid);
+            passes.push(next);
+        }
+    }
+
+    let mut artifacts = Artifacts::default();
+    for p in &passes {
+        artifacts.append(p);
+    }
+    let corrections = compute_corrections(peaks, &clean);
+    (
+        clean.into_iter().map(|p| p.0).collect(),
+        artifacts,
+        passes,
+        corrections,
+    )
 }
 
 fn check_strictly_increasing(peaks: &[usize]) -> Result<(), HrvError> {
@@ -860,7 +1132,9 @@ fn check_strictly_increasing(peaks: &[usize]) -> Result<(), HrvError> {
 /// Kubios artifact detection and correction (NeuroKit2 `signal_fixpeaks(method="Kubios")`).
 ///
 /// `peaks` must be strictly increasing (otherwise [`HrvError::UnsortedPeaks`]). Returns the corrected
-/// peaks and the artifacts of **every** applied pass (cumulative), not only of the last one.
+/// peaks, the artifact flags of **every** applied pass (cumulative), not only of the last one, and
+/// the per-beat [`Corrections`]. Gate on [`KubiosOutput::changed_ratio`] (beats actually changed),
+/// not on `artifacts.total_count()` (flags over all passes).
 /// Note: one call treats `peaks` as one continuous recording; for recordings with gaps use
 /// [`crate::gaps::fix_peaks_segmented`] so that no beats are inserted into a gap.
 pub fn fix_peaks_with(
@@ -872,39 +1146,15 @@ pub fn fix_peaks_with(
     if !(sampling_rate.is_finite() && sampling_rate > 0.0) {
         return Err(HrvError::InvalidSamplingRate(sampling_rate));
     }
-    if peaks.len() < 3 {
-        return Ok(KubiosOutput {
-            peaks: peaks.to_vec(),
-            ..Default::default()
+    let (peaks, artifacts, passes, corrections) =
+        fix_core(peaks, sampling_rate, params, |prev: usize, next: usize| {
+            prev + (next - prev) / 2
         });
-    }
-
-    let first = detect_artifacts(peaks, sampling_rate, params);
-    let mut peaks_clean = correct_artifacts(&first, peaks);
-    let mut current = first.total_count();
-    let mut passes = vec![first];
-
-    if params.iterative {
-        loop {
-            let next = detect_artifacts(&peaks_clean, sampling_rate, params);
-            let count = next.total_count();
-            if count >= current {
-                break;
-            }
-            current = count;
-            peaks_clean = correct_artifacts(&next, &peaks_clean);
-            passes.push(next);
-        }
-    }
-
-    let mut artifacts = Artifacts::default();
-    for p in &passes {
-        artifacts.append(p);
-    }
     Ok(KubiosOutput {
-        peaks: peaks_clean,
+        peaks,
         artifacts,
         passes,
+        corrections,
     })
 }
 
@@ -1207,6 +1457,132 @@ mod tests {
         // np.pad([0,1,2,3], 2, "reflect") = [2,1,0,1,2,3,2,1]
         let idx: Vec<usize> = (-2..6).map(|i| reflect_index(i, 4)).collect();
         assert_eq!(idx, vec![2, 1, 0, 1, 2, 3, 2, 1]);
+    }
+
+    /// Structural invariants of `Corrections` against input and output.
+    fn check_corrections<T: PeakPos + PartialEq + std::fmt::Debug>(
+        input: &[T],
+        output: &[T],
+        c: &Corrections,
+    ) {
+        assert_eq!(c.n_input(), input.len());
+        assert_eq!(c.n_output(), output.len());
+        assert_eq!(
+            output.len(),
+            input.len() - c.removed_count() + c.inserted_count()
+        );
+        assert_eq!(c.changed_count(), c.moved_count() + c.inserted_count());
+        let mut last = None;
+        for (i, o) in c.input_to_output.iter().enumerate() {
+            if let Some(j) = *o {
+                assert!(last.is_none_or(|l| j > l), "mapping not increasing");
+                last = Some(j);
+                match c.status[j] {
+                    BeatStatus::Unchanged => assert_eq!(input[i], output[j]),
+                    BeatStatus::Moved => assert_ne!(input[i], output[j]),
+                    BeatStatus::Inserted => panic!("inserted beat mapped to input {i}"),
+                }
+            }
+        }
+        let back = c.output_to_input();
+        for (j, s) in c.status.iter().enumerate() {
+            assert_eq!(back[j].is_none(), *s == BeatStatus::Inserted);
+        }
+        assert_eq!(
+            c.changed_mask().iter().filter(|&&m| m).count(),
+            c.changed_count()
+        );
+    }
+
+    #[test]
+    fn corrections_regular_series_unchanged() {
+        let peaks = vec![100, 510, 920, 1330, 1740, 2150, 2560, 2970, 3380, 3790];
+        let out = fix_peaks_with(&peaks, 512.0, &KubiosParams::default()).unwrap();
+        assert_eq!(out.changed_count(), 0);
+        assert_eq!(out.changed_ratio(), 0.0);
+        assert_eq!(out.corrections, Corrections::identity(peaks.len()));
+        check_corrections(&peaks, &out.peaks, &out.corrections);
+    }
+
+    #[test]
+    fn corrections_moved_beat() {
+        // NeuroKit2: longshort [2], 1330 -> 1125
+        let peaks = vec![100, 510, 1330, 1740, 2150, 2560, 2970, 3380, 3790];
+        let out = fix_peaks_with(&peaks, 512.0, &KubiosParams::default()).unwrap();
+        let c = &out.corrections;
+        assert_eq!(c.moved_count(), 1);
+        assert_eq!(c.status[2], BeatStatus::Moved);
+        assert_eq!(c.input_to_output[2], Some(2));
+        assert_eq!((c.inserted_count(), c.removed_count()), (0, 0));
+        assert_eq!(out.changed_ratio(), 1.0 / 9.0);
+        check_corrections(&peaks, &out.peaks, c);
+    }
+
+    #[test]
+    fn corrections_ignore_flags_that_change_nothing() {
+        // first pass: missed [3] and longshort [1]; the long/short "correction" of beat 1 puts it
+        // back where it was, so only the inserted beat is a change.
+        let peaks = vec![
+            100, 510, 921, 1741, 2150, 2560, 2971, 3380, 3790, 4200, 4611, 5020, 5431,
+        ];
+        let out = fix_peaks_with(&peaks, 512.0, &KubiosParams::default()).unwrap();
+        assert!(out.artifacts.total_count() >= 2);
+        let c = &out.corrections;
+        assert_eq!(c.inserted_count(), 1);
+        assert_eq!(c.status[3], BeatStatus::Inserted);
+        assert_eq!(c.status[1], BeatStatus::Unchanged);
+        assert_eq!((c.moved_count(), c.removed_count()), (0, 0));
+        assert_eq!(out.changed_count(), 1);
+        assert_eq!(c.input_to_output[3], Some(4));
+        check_corrections(&peaks, &out.peaks, c);
+    }
+
+    #[test]
+    fn corrections_removed_beat() {
+        // regular series with slight variability and one extra beat between beats 20 and 21
+        let mut peaks: Vec<usize> = (0..40)
+            .map(|i| 200 + i * 435 + (15.0 * (i as f64 * 0.7).sin()).round() as usize + 15)
+            .collect();
+        let extra = (peaks[20] + peaks[21]) / 2 + 7;
+        peaks.insert(21, extra);
+        let out = fix_peaks_with(&peaks, 512.0, &KubiosParams::default()).unwrap();
+        let c = &out.corrections;
+        assert!(c.removed_count() >= 1, "{:?}", out.passes);
+        assert_eq!(c.input_to_output[21], None);
+        assert!(!out.peaks.contains(&extra));
+        check_corrections(&peaks, &out.peaks, c);
+    }
+
+    #[test]
+    fn corrections_compare_final_with_input() {
+        let input = [0usize, 10, 20, 30, 40];
+        // beat 1 removed and a beat inserted at exactly its position: unchanged
+        // beat 3 moved (keeps its origin), a new beat inserted after 40
+        let output = [
+            (0usize, 0usize),
+            (10, INSERTED),
+            (20, 2),
+            (33, 3),
+            (40, 4),
+            (50, INSERTED),
+        ];
+        let c = compute_corrections(&input, &output);
+        use BeatStatus::*;
+        assert_eq!(
+            c.status,
+            vec![Unchanged, Unchanged, Unchanged, Moved, Unchanged, Inserted]
+        );
+        assert_eq!(
+            c.input_to_output,
+            vec![Some(0), Some(1), Some(2), Some(3), Some(4)]
+        );
+        assert_eq!(c.removed, 0);
+        assert_eq!(c.changed_count(), 2);
+        assert_eq!(c.changed_ratio(), 2.0 / 6.0);
+        let values: Vec<usize> = output.iter().map(|p| p.0).collect();
+        check_corrections(&input, &values, &c);
+        // empty
+        assert!(Corrections::identity(0).changed_ratio().is_nan());
     }
 
     #[test]
