@@ -100,8 +100,22 @@ for packet in packets {                     // 32 raw samples
     det.push(&filt.process(packet), &mut out)?;
     // out.primary / out.secondary: confirmed peaks (index: u64, position: f64)
 }
+// A gap (connection lost, timestamps jump): close the segment and restart the filter state.
+let gap = det.reset_at(det.next_index() + gap_samples, &mut out)?;
+filt.reset();
+// ... keep pushing packets of the next segment ...
 det.flush(&mut out)?;
+// RR per segment from sub-sample positions (never across `gap`):
+let rri = fast_hrv::rri_from_positions(&positions_of_one_segment, 512.0);
 ```
+
+A complete runnable version (two segments with a gap, a `push_with` callback, RR and RMSSD per segment)
+is in [`examples/streaming.rs`](examples/streaming.rs): `cargo run --release --example streaming`.
+
+**Reprocessing history must use the same causal path** (`EcgStreamFilter`, reset at every gap, then
+`StreamDetector` or `dual_detect_windowed` on that output) to reproduce the live peaks. Cleaning history
+with the zero-phase filter shifts peaks by ~8–10 ms; on noisy real recordings 16–26 % of them then no
+longer match the live peaks within 50 ms.
 
 ## Gaps
 
