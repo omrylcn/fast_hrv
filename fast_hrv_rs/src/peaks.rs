@@ -556,11 +556,18 @@ impl Corrections {
 }
 
 /// Parameters of the Kubios artifact detection (defaults as in Lipponen & Tarvainen 2019 / NeuroKit2).
+///
+/// With the defaults the detection is bit-identical to NeuroKit2 `signal_fixpeaks(method="Kubios")`
+/// (tested on the NeuroKit2 fixtures). Build variants with struct update syntax, e.g.
+/// `KubiosParams { alpha: 6.0, ..Default::default() }`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KubiosParams {
+    /// Ectopic decision line `s12 < -c1·dRR - c2` (and its mirror), slope.
     pub c1: f64,
+    /// Ectopic decision line, offset.
     pub c2: f64,
-    /// Threshold multiplier of the quartile deviation.
+    /// Threshold multiplier of the quartile deviation: `Th = alpha · (Q3 − Q1) / 2` of `|dRR|` (Th1)
+    /// and of `|mRR|` (Th2). Default 5.2 (Lipponen & Tarvainen 2019). Larger values flag fewer beats.
     pub alpha: f64,
     /// Width (beats) of the rolling quartile window.
     pub window_width: usize,
@@ -568,6 +575,15 @@ pub struct KubiosParams {
     pub medfilt_order: usize,
     /// Repeat detection + correction while the number of artifacts decreases.
     pub iterative: bool,
+    /// Absolute lower bound (seconds) on both time-varying thresholds: `Th1 = max(Th1, floor)` (dRR)
+    /// and `Th2 = max(Th2, floor)` (mRR). Default `0.0` = no floor, i.e. the published algorithm and
+    /// NeuroKit2 parity (bit-identical: the floor is not applied at all when it is `<= 0`).
+    ///
+    /// On very regular (low-HRV) series the quartile deviation is small, so the thresholds are a few
+    /// milliseconds and ordinary beat-to-beat variation or small fiducial jitter gets flagged; a floor
+    /// stops that. Note that Th2 is also the tolerance of the missed / extra classification
+    /// (`|RR/2 − medRR| < Th2`, `|RR[j] + RR[j+1] − medRR| < Th2`), so a floor widens that tolerance too.
+    pub threshold_floor_s: f64,
 }
 
 impl Default for KubiosParams {
@@ -579,6 +595,7 @@ impl Default for KubiosParams {
             window_width: 91,
             medfilt_order: 11,
             iterative: true,
+            threshold_floor_s: 0.0,
         }
     }
 }
@@ -771,14 +788,20 @@ pub fn rolling_median_centered(x: &[f64], window: usize) -> Vec<f64> {
     })
 }
 
-/// NeuroKit `_compute_threshold`: `alpha * (Q3 - Q1) / 2` of `|signal|` over a centred rolling window.
-fn compute_threshold(signal: &[f64], alpha: f64, window_width: usize) -> Vec<f64> {
+/// NeuroKit `_compute_threshold`: `alpha * (Q3 - Q1) / 2` of `|signal|` over a centred rolling window,
+/// raised to `floor` where it is below it (only when `floor > 0`; a NaN threshold stays NaN, as
+/// `np.maximum`).
+fn compute_threshold(signal: &[f64], alpha: f64, window_width: usize, floor: f64) -> Vec<f64> {
     let abs_signal: Vec<f64> = signal.iter().map(|x| x.abs()).collect();
     let q1 = rolling_quantile_centered(&abs_signal, window_width, 0.25);
     let q3 = rolling_quantile_centered(&abs_signal, window_width, 0.75);
+    let apply_floor = floor > 0.0;
     q1.iter()
         .zip(&q3)
-        .map(|(&a, &b)| alpha * ((b - a) / 2.0))
+        .map(|(&a, &b)| {
+            let th = alpha * ((b - a) / 2.0);
+            if apply_floor && th < floor { floor } else { th }
+        })
         .collect()
 }
 
@@ -968,7 +991,12 @@ fn detect_core<T: PeakPos>(peaks: &[T], sampling_rate: f64, params: &KubiosParam
     }
     drrs[0] = numpy_sum(&drrs[1..]) / (n - 1) as f64;
 
-    let th1 = compute_threshold(&drrs, params.alpha, params.window_width);
+    let th1 = compute_threshold(
+        &drrs,
+        params.alpha,
+        params.window_width,
+        params.threshold_floor_s,
+    );
     let drrs: Vec<f64> = drrs
         .iter()
         .zip(&th1)
@@ -985,7 +1013,12 @@ fn detect_core<T: PeakPos>(peaks: &[T], sampling_rate: f64, params: &KubiosParam
             if d < 0.0 { d * 2.0 } else { d }
         })
         .collect();
-    let th2 = compute_threshold(&mrrs, params.alpha, params.window_width);
+    let th2 = compute_threshold(
+        &mrrs,
+        params.alpha,
+        params.window_width,
+        params.threshold_floor_s,
+    );
     let mrrs: Vec<f64> = mrrs
         .iter()
         .zip(&th2)
@@ -1310,6 +1343,7 @@ pub fn fix_peaks(
         window_width,
         medfilt_order,
         iterative,
+        threshold_floor_s: 0.0,
     };
     let mut sorted = peaks.to_vec();
     if check_strictly_increasing(&sorted).is_err() {
