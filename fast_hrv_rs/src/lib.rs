@@ -23,6 +23,8 @@
 //! Kaynak: `omrylcn/fast_hrv` (fast_hrv_rs) üzerine kurulmuştur.
 
 pub mod ecg;
+pub mod error;
+pub mod filter;
 pub mod frequency;
 pub mod hrv;
 pub mod peaks;
@@ -35,7 +37,11 @@ pub mod simd;
 #[cfg(feature = "python")]
 mod python;
 
-pub use ecg::{EcgResult, EcgStats, compute_quality, compute_stats, ecg_clean, process_ecg};
+pub use ecg::{
+    EcgFilterConfig, EcgResult, EcgStats, EcgStreamFilter, compute_quality, compute_stats,
+    ecg_clean, ecg_clean_causal, ecg_clean_neurokit, ecg_clean_zero_phase, process_ecg,
+};
+pub use error::HrvError;
 pub use frequency::{FrequencyDomain, frequency_domain, welch};
 pub use hrv::*;
 pub use peaks::{
