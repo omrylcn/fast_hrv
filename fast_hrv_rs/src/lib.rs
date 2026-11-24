@@ -22,6 +22,9 @@
 //!
 //! Kaynak: `omrylcn/fast_hrv` (fast_hrv_rs) üzerine kurulmuştur.
 
+// Index loops are the clearest form for the DSP kernels here (several arrays indexed together).
+#![allow(clippy::needless_range_loop)]
+
 pub mod ecg;
 pub mod error;
 pub mod filter;

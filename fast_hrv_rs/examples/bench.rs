@@ -1,3 +1,4 @@
+#![allow(clippy::needless_range_loop)]
 use std::time::Instant;
 fn main() {
     let fs = 512u32;

@@ -17,14 +17,14 @@ crate-type = ["rlib", "cdylib"]
 [features]
 default = []
 serde = ["dep:serde"]
-parallel = ["dep:rayon"]
+# Reserved, currently no effect (kept so existing `--features parallel` builds keep working).
+parallel = []
 simd = []
 python = ["dep:pyo3", "dep:numpy"]
 
 [dependencies]
 ordered-float = "4.2"
 serde = { version = "1", features = ["derive"], optional = true }
-rayon = { version = "1.10", optional = true }
 pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
 numpy = { version = "0.22", optional = true }
 

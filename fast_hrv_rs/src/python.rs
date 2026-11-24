@@ -7,6 +7,9 @@
 //!
 //! Arrays may be non-contiguous (they are copied); negative peak indices raise `ValueError`.
 
+// `useless_conversion` / `type_complexity` are triggered by PyO3 0.22 macro expansion.
+#![allow(clippy::useless_conversion, clippy::type_complexity)]
+
 use numpy::{PyArray1, PyReadonlyArray1, ToPyArray};
 use pyo3::prelude::*;
 
