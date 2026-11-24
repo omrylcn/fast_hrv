@@ -211,6 +211,10 @@ fn band_peak(freqs: &[f64], psd: &[f64], (lo, hi): (f64, f64)) -> f64 {
 /// Below the minimum the band's power, its ratios and its peak frequency are NaN.
 /// Defaults follow the Task Force (1996) recommendation: about 10 cycles of the band's lowest
 /// frequency (HF ≥ 1 min, LF ≥ 2 min, VLF ≥ 5 min).
+///
+/// These defaults are **technical lower limits** (below them the band cannot be estimated), not
+/// recommended analysis lengths: for interpretable LF and LF/HF use ≥ 180 s at the very least and
+/// ≥ 300 s when reporting or comparing them (see the README, "Minimum data").
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrequencyOptions {
     pub min_duration_hf_s: f64,

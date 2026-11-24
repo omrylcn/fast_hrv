@@ -4,6 +4,10 @@ All notable changes to this crate. The format follows [Keep a Changelog](https:/
 
 ## [0.6.1] - unreleased
 
+### Documentation
+- Per-band frequency-domain minimums (HF ≥ 60 s, LF ≥ 120 s, VLF ≥ 300 s) are documented as technical
+  lower limits; recommended: LF and LF/HF ≥ 180 s, ≥ 300 s when reported or compared. No behaviour change.
+
 ### Changed
 - `ExclusionParams::exclude_inserted_removed` now defaults to `false`. Measured on a real wearable
   recording set and on injected synthetic data: coverage identical, and `true` never improved RMSSD

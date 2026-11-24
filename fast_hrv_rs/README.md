@@ -272,6 +272,13 @@ Minimum data (otherwise the metric is `NaN`): time domain ≥ 3 intervals; frequ
 intervals. A constant RR series gives zero band power and `NaN` LF/HF. Inputs containing `NaN` give `NaN`
 results; invalid inputs never panic. Bands follow the Task Force (1996) definitions.
 
+**These per-band minimums are technical lower limits, not recommendations.** Below them a band cannot be
+estimated at all (about 10 cycles of its lowest frequency, Task Force 1996). For interpretable values use
+longer records: LF and LF/HF ≥ 180 s at the very least (the shortest window with validated agreement against
+5 min records, Shaffer et al. 2019/2020), and ≥ 300 s (the Task Force short-term standard) when they are
+reported or compared. LF/HF is not a sympathovagal-balance or stress index (Billman 2013; Quigley et al.
+2024). Raise the limits per application with `FrequencyOptions`, e.g. `min_duration_lf_s: 300.0`.
+
 ## Accuracy
 
 Checked in `cargo test` against reference values generated at development time with SciPy and NeuroKit2
