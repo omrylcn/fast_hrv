@@ -128,6 +128,11 @@ synthetic 5-minute ECG at 512 Hz (median of 21 runs). Example (Intel i7-9700K, R
 | `elgendi_refined_windowed` (10 s windows + 2 × 2 s margin) | ~2.8 ms |
 | `dual_detect` on 30 × 10 s windows (both detectors + bSQI) | ~3.2 ms |
 
+`cargo bench --bench capacity` simulates the planned per-user live pipeline (stream filter, 10 s dual
+detection + SQI, 60 s Kubios + time domain, 5 min full `hrv()`) for 500 interleaved synthetic sessions
+and reports CPU per user, users per core, per-second load spikes and memory; results and method in
+[CAPACITY.md](CAPACITY.md) (Turkish).
+
 ## Features
 
 | Feature | Effect |

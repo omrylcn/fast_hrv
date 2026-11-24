@@ -22,6 +22,8 @@ All notable changes to this crate. The format follows [Keep a Changelog](https:/
 - NeuroKit2 Elgendi fixtures (`tests/data/neurokit_elgendi.json`, `tools/detect_reference.py`) and
   `tests/detect.rs` (parity, refinement accuracy on synthetic ECG with known R, dual detector, 30 min
   windowed recording, start-index invariance); detector rows in `benches/throughput.rs`.
+- `benches/capacity.rs` and `CAPACITY.md`: per-user CPU and memory of the planned live pipeline
+  (500 interleaved synthetic sessions, aligned vs staggered schedules, per-second load spikes).
 
 ### Changed (breaking)
 - `HrvError` has a new variant `InvalidParameter(&'static str)` (exhaustive matches must handle it).

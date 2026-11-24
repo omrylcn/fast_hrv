@@ -36,3 +36,7 @@ serde_json = "1.0"
 [[bench]]
 name = "throughput"
 harness = false
+
+[[bench]]
+name = "capacity"
+harness = false
