@@ -7,6 +7,10 @@
 use std::hint::black_box;
 use std::time::Instant;
 
+use fast_hrv::detect::{
+    DualConfig, ElgendiConfig, RefineConfig, WindowConfig, dual_detect, elgendi_peaks,
+    elgendi_refined_windowed, refine_peaks,
+};
 use fast_hrv::ecg::{EcgFilterConfig, EcgStreamFilter};
 
 fn synthetic_ecg(fs: f64, seconds: f64) -> Vec<f64> {
@@ -79,6 +83,28 @@ fn main() {
     let hrv_t = time_ms(reps, || {
         black_box(fast_hrv::hrv(black_box(&rri)));
     });
+    // detectors on the 0.5–40 Hz zero-phase clean signal
+    let fsf = fs as f64;
+    let wide = fast_hrv::ecg_clean_zero_phase(&x, fsf, &EcgFilterConfig::default()).unwrap();
+    let ecfg = ElgendiConfig::default();
+    let elg_t = time_ms(reps, || {
+        black_box(elgendi_peaks(black_box(&wide), fsf, &ecfg).unwrap());
+    });
+    let elg = elgendi_peaks(&wide, fsf, &ecfg).unwrap();
+    let rcfg = RefineConfig::default();
+    let refine_t = time_ms(reps, || {
+        black_box(refine_peaks(black_box(&wide), fsf, &elg, &rcfg).unwrap());
+    });
+    let wcfg = WindowConfig::default();
+    let windowed_t = time_ms(reps, || {
+        black_box(elgendi_refined_windowed(black_box(&wide), fsf, 0, &wcfg, &ecfg, &rcfg).unwrap());
+    });
+    let dcfg = DualConfig::default();
+    let dual_t = time_ms(reps, || {
+        for w in wide.chunks(10 * fs as usize) {
+            black_box(dual_detect(black_box(w), fsf, &dcfg).unwrap());
+        }
+    });
     let mut gap = rri.clone();
     gap[100] = 69_000.0;
     let hrv_gap = time_ms(reps, || {
@@ -100,4 +126,8 @@ fn main() {
         rri.len()
     );
     println!("  hrv() with one 69 s RR (gap)                 {hrv_gap:8.2} ms");
+    println!("  elgendi_peaks (8–20 Hz + detection)          {elg_t:8.2} ms");
+    println!("  refine_peaks (±50 ms, parabolic)             {refine_t:8.2} ms");
+    println!("  elgendi_refined_windowed (10 s + 2×2 s)      {windowed_t:8.2} ms");
+    println!("  dual_detect on 30 × 10 s windows (+bSQI)     {dual_t:8.2} ms");
 }

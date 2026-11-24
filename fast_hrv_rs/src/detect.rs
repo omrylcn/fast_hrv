@@ -252,8 +252,13 @@ pub fn moving_average_causal(x: &[f64], w: usize) -> Vec<f64> {
         s += reflect(x, k as isize - (w as isize - 1));
     }
     out[0] = s / wf;
-    for i in 1..n {
+    let split = w.min(n);
+    for i in 1..split {
         s += x[i] - reflect(x, i as isize - w as isize);
+        out[i] = s / wf;
+    }
+    for i in split.max(1)..n {
+        s += x[i] - x[i - w];
         out[i] = s / wf;
     }
     let head = (w - 1).min(n);
