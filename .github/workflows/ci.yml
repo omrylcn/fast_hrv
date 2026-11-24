@@ -79,6 +79,9 @@ jobs:
           workspaces: ${{ env.CRATE_DIR }}
       - run: cargo test --release
         working-directory: ${{ env.CRATE_DIR }}
+      # `cargo test` only writes target/release/deps/libfast_hrv-<hash>.rlib; build the library itself
+      - run: cargo build --release --lib
+        working-directory: ${{ env.CRATE_DIR }}
       - name: No AVX instructions in the release library
         working-directory: ${{ env.CRATE_DIR }}
         run: |
