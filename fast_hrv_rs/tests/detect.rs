@@ -364,3 +364,83 @@ fn sub_sample_peaks_reduce_rmssd_bias() {
         assert!((x - y).abs() < 1e-9);
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Dual-detector API
+// ---------------------------------------------------------------------------------------------
+
+use fast_hrv::detect::{DualConfig, dual_detect};
+use fast_hrv::sqi::{DEFAULT_BSQI_TOLERANCE_S, bsqi_detail};
+
+#[test]
+fn dual_detect_agrees_on_clean_signal() {
+    for (seed, sign) in [(31u64, 1.0), (32, -1.0)] {
+        let s = synth_ecg(FS, 10.0, seed, 0.02, sign);
+        let c = clean(&s.signal);
+        let d = dual_detect(&c, FS, &DualConfig::default()).unwrap();
+        let b = d.bsqi.expect("beats found");
+        // results are consistent with the building blocks
+        assert_eq!(
+            d.primary_raw,
+            elgendi_peaks(&c, FS, &ElgendiConfig::default()).unwrap()
+        );
+        assert_eq!(
+            d.secondary_raw,
+            fast_hrv::peaks::find_peaks_default(&c, FS as u32)
+        );
+        assert_eq!(
+            b,
+            bsqi_detail(
+                &d.primary.indices,
+                &d.secondary.indices,
+                FS,
+                DEFAULT_BSQI_TOLERANCE_S
+            )
+            .unwrap()
+        );
+        assert_eq!(d.secondary.sign, d.primary.sign);
+        // with both on the same fiducial the strict 0.05 s variant agrees as well
+        let strict = dual_detect(
+            &c,
+            FS,
+            &DualConfig {
+                bsqi_tolerance_s: 0.05,
+                ..DualConfig::default()
+            },
+        )
+        .unwrap();
+        eprintln!(
+            "sign {sign:+}: primary {} secondary {} bSQI@0.15 {:.3} bSQI@0.05 {:.3}",
+            d.primary.indices.len(),
+            d.secondary.indices.len(),
+            b.bsqi,
+            strict.bsqi.unwrap().bsqi
+        );
+        assert!(b.bsqi >= 0.9, "bSQI {}", b.bsqi);
+        assert!(strict.bsqi.unwrap().bsqi >= 0.9);
+        assert!(
+            errors_to_truth(&s.r_true[1..], &d.primary.positions)
+                .iter()
+                .all(|&e| e <= 1.0)
+        );
+    }
+}
+
+#[test]
+fn dual_detect_reports_disagreement_on_noise() {
+    let mut rng = Rng(77);
+    let noise: Vec<f64> = (0..5120).map(|_| rng.gauss()).collect();
+    let c = clean(&noise);
+    let d = dual_detect(&c, FS, &DualConfig::default()).unwrap();
+    eprintln!(
+        "noise: primary {} secondary {} bSQI {:?}",
+        d.primary.indices.len(),
+        d.secondary.indices.len(),
+        d.bsqi.map(|b| b.bsqi)
+    );
+    assert!(d.bsqi.is_none_or(|b| b.bsqi < 0.8));
+    // empty / flat input: no beats, no bSQI, no panic
+    let flat = dual_detect(&vec![0.0; 5120], FS, &DualConfig::default()).unwrap();
+    assert!(flat.bsqi.is_none() && flat.primary.indices.is_empty());
+    assert!(dual_detect(&c, 0.0, &DualConfig::default()).is_err());
+}

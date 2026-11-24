@@ -45,8 +45,8 @@ pub mod simd;
 mod python;
 
 pub use detect::{
-    DetectorFilter, ElgendiConfig, Polarity, RefineConfig, RefinedPeaks, elgendi_peaks,
-    refine_peaks,
+    DetectorFilter, DualConfig, DualDetection, ElgendiConfig, Polarity, RefineConfig, RefinedPeaks,
+    dual_detect, elgendi_peaks, refine_peaks,
 };
 pub use ecg::{
     EcgFilterConfig, EcgResult, EcgStats, EcgStreamFilter, compute_quality, compute_stats,

@@ -6,6 +6,8 @@
 //! - [`refine_peaks`]: moves candidate peaks (from any detector) onto the R extremum of the clean
 //!   signal within ±50 ms and adds 3-point parabolic interpolation (sub-sample positions). Use
 //!   [`crate::rri_from_positions`] / [`crate::rri_from_times`] for RR intervals from them.
+//! - [`dual_detect`]: primary (Elgendi + refinement) and secondary (NeuroKit2 method) peaks on the
+//!   same window plus their bSQI. Results only, no quality gate.
 //!
 //! All durations are given in seconds and converted with the sampling rate, so the detector is not
 //! tied to one sampling rate. Functions are stateless: the same input always gives the same peaks.
@@ -527,6 +529,110 @@ pub fn refine_peaks(
         out.positions.push(p);
     }
     Ok(out)
+}
+
+// =============================================================================
+// Dual-detector agreement (primary Elgendi + refinement, secondary NeuroKit2 method)
+// =============================================================================
+
+/// Parameters of [`dual_detect`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DualConfig {
+    /// Primary detector. Default [`ElgendiConfig::default`].
+    pub elgendi: ElgendiConfig,
+    /// Refinement of the primary peaks. Default [`RefineConfig::default`] (±50 ms, auto polarity).
+    pub refine: RefineConfig,
+    /// Also refine the secondary peaks, with the same sign as the primary, so that both detectors
+    /// report the same fiducial point (needed for a tight bSQI tolerance). Default `true`.
+    pub refine_secondary: bool,
+    /// bSQI matching tolerance (s). Default [`crate::sqi::DEFAULT_BSQI_TOLERANCE_S`] = 0.15 s
+    /// (Li, Mark & Clifford 2008). NeuroKit2's `ecg_quality(method="ici")` uses a stricter 0.05 s;
+    /// that variant needs both peak sets on the same fiducial (`refine_secondary = true`).
+    pub bsqi_tolerance_s: f64,
+}
+
+impl Default for DualConfig {
+    fn default() -> Self {
+        Self {
+            elgendi: ElgendiConfig::default(),
+            refine: RefineConfig::default(),
+            refine_secondary: true,
+            bsqi_tolerance_s: crate::sqi::DEFAULT_BSQI_TOLERANCE_S,
+        }
+    }
+}
+
+/// Result of [`dual_detect`]. Results only: no quality decision is taken here.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct DualDetection {
+    /// Primary peaks: Elgendi + [`refine_peaks`] (sub-sample positions and integer indices).
+    pub primary: RefinedPeaks,
+    /// Primary detector output before refinement (detector fiducials, late by the filter delay).
+    pub primary_raw: Vec<usize>,
+    /// Secondary peaks: the NeuroKit2 default method ([`crate::peaks::find_peaks_default`]) on the
+    /// same signal, refined with the primary's sign if [`DualConfig::refine_secondary`].
+    pub secondary: RefinedPeaks,
+    /// Secondary detector output before refinement.
+    pub secondary_raw: Vec<usize>,
+    /// bSQI between `primary.indices` and `secondary.indices` at
+    /// [`DualConfig::bsqi_tolerance_s`]; `None` when neither detector found a beat.
+    pub bsqi: Option<crate::sqi::Bsqi>,
+}
+
+/// Run two independent detectors on the same window and measure their agreement (bSQI).
+///
+/// - primary: [`elgendi_peaks`] (8–20 Hz, two moving averages) refined on `clean` with
+///   [`refine_peaks`];
+/// - secondary: the existing NeuroKit2 method ([`crate::peaks::find_peaks_default`]: smoothed
+///   gradient, QRS regions, 0.3 s minimum delay) on `clean`. It is the second detector recommended
+///   by the real-data evaluation (more consistent with Elgendi than EngZee, see `CHANGES-DETECT.md`).
+///
+/// `clean` is the wide-band clean ECG of one window (e.g. 10 s at 0.5–40 Hz). `fs` is rounded to
+/// an integer for the NeuroKit2 method. Stateless: for long recordings call it per window.
+pub fn dual_detect(clean: &[f64], fs: f64, cfg: &DualConfig) -> Result<DualDetection, HrvError> {
+    check_fs(fs)?;
+    check_finite(clean)?;
+    if !(cfg.bsqi_tolerance_s.is_finite() && cfg.bsqi_tolerance_s >= 0.0) {
+        return Err(HrvError::InvalidParameter("bsqi_tolerance_s"));
+    }
+    let primary_raw = elgendi_peaks(clean, fs, &cfg.elgendi)?;
+    let primary = refine_peaks(clean, fs, &primary_raw, &cfg.refine)?;
+    let fs_int = fs.round().max(1.0) as u32;
+    let secondary_raw = crate::peaks::find_peaks_default(clean, fs_int);
+    let secondary = if cfg.refine_secondary {
+        let polarity = match primary.sign {
+            s if s > 0.0 => Polarity::Positive,
+            s if s < 0.0 => Polarity::Negative,
+            _ => Polarity::Absolute,
+        };
+        let rc = RefineConfig {
+            polarity,
+            ..cfg.refine
+        };
+        refine_peaks(clean, fs, &secondary_raw, &rc)?
+    } else {
+        RefinedPeaks {
+            positions: secondary_raw.iter().map(|&p| p as f64).collect(),
+            indices: secondary_raw.clone(),
+            sign: 1.0,
+        }
+    };
+    let bsqi = crate::sqi::bsqi_detail(
+        &primary.indices,
+        &secondary.indices,
+        fs,
+        cfg.bsqi_tolerance_s,
+    )
+    .ok();
+    Ok(DualDetection {
+        primary,
+        primary_raw,
+        secondary,
+        secondary_raw,
+        bsqi,
+    })
 }
 
 // =============================================================================
