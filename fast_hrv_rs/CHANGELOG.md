@@ -2,6 +2,16 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.0] - unreleased
+
+### Added
+- `respiration` module, breathing rate from a single-lead ECG (EDR): `r_amplitudes` (R amplitude over the
+  PR baseline), `modulation_rate` (Lomb–Scargle peak in 0.1–0.5 Hz on the uneven beat series),
+  `respiratory_rate` (amplitude + RR modulation, smart fusion: mean when they agree within 4 breaths/min,
+  otherwise invalid; Karlen 2013), `hf_band_for` (HF band centred on the breathing rate).
+  Synthetic ECG 9–22/min: error ≤ 0.01/min. NeuroKit2 ECGSYN (15/min): 4 of 6 windows valid, error ≤ 0.6/min,
+  the others rejected (no wrong value).
+
 ## [0.7.0] - unreleased
 
 ### Added

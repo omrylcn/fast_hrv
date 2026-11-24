@@ -43,6 +43,7 @@ pub mod hrv;
 pub mod metrics;
 pub mod peaks;
 pub mod report;
+pub mod respiration;
 pub mod sqi;
 pub mod stream;
 pub mod time_domain;
@@ -85,6 +86,10 @@ pub use peaks::{
 pub use report::{
     Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks, rri_from_positions, rri_from_times,
     try_rri_from_peaks, try_rri_from_times,
+};
+pub use respiration::{
+    ModulationEstimate, RespirationConfig, RespirationEstimate, hf_band_for, modulation_rate,
+    r_amplitudes, respiratory_rate,
 };
 pub use stream::{
     StreamConfig, StreamDetector, StreamPeak, StreamPeaks, StreamWindow, fix_stream_peaks,

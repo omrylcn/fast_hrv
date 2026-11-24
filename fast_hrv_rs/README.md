@@ -274,6 +274,14 @@ filled in. Classical periodogram, density scaled so that a sine of amplitude A g
 grid step 1 / (5 · T) up to 0.5 Hz; same bands, minimum durations and outputs as Welch. The two estimators
 agree within ~15 % on gap-free series; compare values only within one method. About 0.7 ms per 5 min window.
 
+**Breathing rate (ECG-derived respiration):** `r_amplitudes(&clean, &peaks, fs)` and
+`respiratory_rate(&beat_times_s, &rr_ms, &r_amp, &RespirationConfig::default())` estimate breaths/min in a
+30–60 s window from the R-amplitude and RR modulations (Lomb–Scargle peak in 0.1–0.5 Hz each; valid only
+when both agree within 4/min, Karlen et al. 2013). Below 9/min the respiratory component falls into the LF
+band; `hf_band_for(rate, 0.1, 0.04)` gives an HF band centred on the breathing rate. Checked on synthetic
+ECG (9–22/min, error ≤ 0.01/min) and NeuroKit2 ECGSYN (15/min, error ≤ 0.6/min on the valid windows); not
+yet validated against a reference respiration signal.
+
 **Window rules per metric:** `METRICS` / `metric_info("lf_hf")` give, for every field, the shortest
 (`min_s`) and the recommended (`recommended_s`) resting recording length with the source of the numbers, so
 an application can read its window rules from the library instead of copying them.
@@ -313,6 +321,7 @@ SciPy 1.18.1, NumPy 2.5.5, pandas 3.1.1.
 | LF, HF, LF/HF, LFnu (records ≥ 5 min) | `nk.hrv_frequency(normalize=False)` | ≤ 24 % observed, test tolerance 30 % (different interpolation and Welch settings) |
 | lnHF | `nk.hrv_frequency` `HRV_LnHF` | ≤ 2.0 % observed (same method difference as HF, on the log scale) |
 | PIP, IALS, PSS, PAS | `nk.hrv_nonlinear` | ≤ 1.4e-16 (identical definitions) |
+| Breathing rate from ECG (2 × 120 s ECGSYN, 15/min) | `nk.ecg_simulate(method="ecgsyn")` respiratory component (`tools/respiration_reference.py`) | 4/6 windows valid, ≤ 0.6/min error; 2 rejected by the AM/FM agreement rule |
 | Lomb–Scargle periodogram (4 series, 120–600 s, with 0–10 % dropped intervals) | `astropy.timeseries.LombScargle(fit_mean=False, normalization="psd")` 8.0.3 (`tools/lomb_reference.py`) | ≤ 1e-9 of the peak |
 | VLF, TINN, DFA α1/α2 | — | not comparable (different definitions; see `tests/neurokit_parity.rs`) |
 
