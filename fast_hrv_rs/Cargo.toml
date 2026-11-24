@@ -1,26 +1,42 @@
 [package]
-name = "fast_hrv_rs"
-version = "0.1.0"
+name = "fast-hrv"
+version = "0.8.0"
 edition = "2024"
-description = "Fast HRV analysis in Rust"
+rust-version = "1.85"
+description = "Fast, dependency-light heart rate variability (HRV) analysis from ECG: R-peaks, artifact correction or exclusion, signal quality, 47 time/frequency (Welch or Lomb–Scargle)/nonlinear/asymmetry/fragmentation metrics, ECG-derived breathing rate"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/omrylcn/fast_hrv"
+readme = "README.md"
+keywords = ["hrv", "ecg", "heart-rate", "biosignal", "dsp"]
+categories = ["science", "algorithms", "mathematics"]
 
 [lib]
-name = "fast_hrv_rs"
-crate-type = ["cdylib", "rlib"]  # cdylib for Python, rlib for Rust
+name = "fast_hrv"
+crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []
-parallel = ["rayon"]
+serde = ["dep:serde"]
+# Reserved, currently no effect (kept so existing `--features parallel` builds keep working).
+parallel = []
 simd = []
-python = ["pyo3", "numpy"]  # Python bindings
-all = ["parallel", "simd"]
+python = ["dep:pyo3", "dep:numpy"]
 
 [dependencies]
 ordered-float = "4.2"
-rayon = { version = "1.10", optional = true }
-serde_json = "1.0"
+serde = { version = "1", features = ["derive"], optional = true }
 pyo3 = { version = "0.22", features = ["extension-module"], optional = true }
 numpy = { version = "0.22", optional = true }
 
 [dev-dependencies]
 approx = "0.5"
+serde_json = "1.0"
+
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "capacity"
+harness = false

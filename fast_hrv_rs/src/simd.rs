@@ -14,7 +14,6 @@ pub fn mean_simd(data: &[f64]) -> f64 {
 
     let n = data.len();
     let chunks = n / 4;
-    let remainder = n % 4;
 
     // Process 4 elements at a time (helps auto-vectorization)
     let mut sum0 = 0.0;

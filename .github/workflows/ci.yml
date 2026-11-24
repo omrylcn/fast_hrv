@@ -1,0 +1,118 @@
+name: CI
+
+# The Rust crate lives in fast_hrv_rs/ (CRATE_DIR); the Python package at the root is not built here.
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main, dev]
+    paths: ["fast_hrv_rs/**", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["fast_hrv_rs/**", ".github/workflows/ci.yml"]
+
+env:
+  CARGO_TERM_COLOR: always
+  CRATE_DIR: fast_hrv_rs
+  # Baseline x86-64: the production server has no AVX, so nothing may assume it.
+  RUSTFLAGS: "-C target-cpu=x86-64 -D warnings"
+  RUSTDOCFLAGS: "-D warnings"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # rust-toolchain.toml pins 1.100.0 with rustfmt and clippy; rustup installs it on first use.
+      - run: cargo fmt --all -- --check
+        working-directory: ${{ env.CRATE_DIR }}
+
+  clippy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "--no-default-features", "--features serde,simd"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ${{ env.CRATE_DIR }}
+      - run: cargo clippy --all-targets ${{ matrix.features }} -- -D warnings
+        working-directory: ${{ env.CRATE_DIR }}
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.100.0 = pinned toolchain, 1.85.0 = MSRV (Cargo.toml rust-version).
+        toolchain: ["1.100.0", "1.85.0"]
+        features: ["", "--no-default-features", "--features serde,simd"]
+    env:
+      # Overrides rust-toolchain.toml for this job.
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ${{ env.CRATE_DIR }}
+          key: ${{ matrix.toolchain }}
+      - run: cargo test --all-targets ${{ matrix.features }}
+        working-directory: ${{ env.CRATE_DIR }}
+      - run: cargo test --doc ${{ matrix.features }}
+        working-directory: ${{ env.CRATE_DIR }}
+
+  no-avx:
+    # Release build for baseline x86-64; fail if any AVX (ymm/zmm/VEX) instruction slips in.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ${{ env.CRATE_DIR }}
+      - run: cargo test --release
+        working-directory: ${{ env.CRATE_DIR }}
+      - name: No AVX instructions in the release library
+        working-directory: ${{ env.CRATE_DIR }}
+        run: |
+          lib=$(ls target/release/libfast_hrv.rlib)
+          n=$(objdump -d "$lib" | grep -cE '%[yz]mm[0-9]' || true)
+          echo "ymm/zmm instructions: $n"
+          test "$n" -eq 0
+      - name: Benchmarks compile
+        run: cargo bench --no-run
+        working-directory: ${{ env.CRATE_DIR }}
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ${{ env.CRATE_DIR }}
+      - run: cargo doc --no-deps --features serde
+        working-directory: ${{ env.CRATE_DIR }}
+
+  python-build:
+    # The Python bindings are not used by the product; only check that they compile.
+    runs-on: ubuntu-latest
+    env:
+      # pyo3 0.22 still emits macro warnings; don't fail this job on them.
+      RUSTFLAGS: "-C target-cpu=x86-64"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ${{ env.CRATE_DIR }}
+      - run: cargo build --features python
+        working-directory: ${{ env.CRATE_DIR }}
