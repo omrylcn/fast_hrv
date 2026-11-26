@@ -41,6 +41,21 @@ pub struct TimeDomain {
     pub hti: f64,
     /// Üçgen enterpolasyonla NN histogram taban genişliği (ms)
     pub tinn: f64,
+    /// SDNN / RMSSD (Sollers 2007; NeuroKit2 `HRV_SDRMSSD`)
+    pub sdrmssd: f64,
+    /// 20th and 80th percentile of the NN intervals (ms; NeuroKit2 `HRV_Prc20NN` / `HRV_Prc80NN`)
+    pub prc20_nn: f64,
+    pub prc80_nn: f64,
+    /// Baevsky stress index `SI = AMo / (2 · Mo · MxDMn)` (Baevsky & Chernikova 2017; Kubios
+    /// definitions): Mo = median NN (s), AMo = share of the intervals in the tallest 50 ms bin of the
+    /// NN histogram (%, bins on a grid starting at 0), MxDMn = max − min NN (s). Unit %/s², usually
+    /// quoted without a unit. Very sensitive to artifacts (MxDMn) and to slow heart-rate drift.
+    /// Recommended window ≥ 5 min of clean NN. A geometric HRV metric, not a stress diagnosis.
+    pub stress_index: f64,
+    /// `√SI`, the form Kubios HRV reports (closer to a normal distribution). Kubios also removes the
+    /// very-low-frequency trend (smoothness priors) before computing it; this crate does not, so values
+    /// match Kubios only on stationary windows.
+    pub stress_index_sqrt: f64,
 }
 
 /// Lineer enterpolasyonlu yüzdelik (NumPy `percentile` varsayılanı ile aynı). `sorted` artan sıralı olmalı.
@@ -176,6 +191,11 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
             sd_hr: nan,
             hti: nan,
             tinn: nan,
+            sdrmssd: nan,
+            prc20_nn: nan,
+            prc80_nn: nan,
+            stress_index: nan,
+            stress_index_sqrt: nan,
         };
     }
     let mut sorted = rri.to_vec();
@@ -190,6 +210,7 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
     let (min_nn, max_nn) = (sorted[0], sorted[sorted.len() - 1]);
     let peak = histogram_peak(&sorted) as f64;
     let tinn_ms = histogram(&sorted, MAX_TINN_BINS).map_or(nan, |(_, h)| tinn(&h));
+    let si = stress_index(&sorted);
 
     TimeDomain {
         mean_nn,
@@ -210,7 +231,38 @@ pub fn time_domain(rri: &[f64]) -> TimeDomain {
         sd_hr: std_ddof(&hr, 1),
         hti: rri.len() as f64 / peak,
         tinn: tinn_ms,
+        sdrmssd: sdnn / rmssd,
+        prc20_nn: percentile_sorted(&sorted, 20.0),
+        prc80_nn: percentile_sorted(&sorted, 80.0),
+        stress_index: si,
+        stress_index_sqrt: si.sqrt(),
     }
+}
+
+/// Bin width of the Baevsky stress index histogram (ms).
+pub const STRESS_INDEX_BIN_MS: f64 = 50.0;
+
+/// Baevsky stress index of sorted NN intervals (ms); NaN if the spread is zero.
+fn stress_index(sorted: &[f64]) -> f64 {
+    let n = sorted.len();
+    let mo_s = percentile_sorted(sorted, 50.0) / 1000.0;
+    let mxdmn_s = (sorted[n - 1] - sorted[0]) / 1000.0;
+    if !(mxdmn_s > 0.0 && mo_s > 0.0) {
+        return f64::NAN;
+    }
+    let (mut best, mut run, mut cur) = (0usize, 0usize, i64::MIN);
+    for &x in sorted {
+        let k = (x / STRESS_INDEX_BIN_MS).floor() as i64;
+        if k == cur {
+            run += 1;
+        } else {
+            cur = k;
+            run = 1;
+        }
+        best = best.max(run);
+    }
+    let amo_pct = best as f64 / n as f64 * 100.0;
+    amo_pct / (2.0 * mo_s * mxdmn_s)
 }
 
 // =============================================================================
@@ -292,9 +344,11 @@ pub fn time_domain_masked(nn_ms: &[f64], valid: &[bool]) -> MaskedTimeDomain {
         } else {
             f64::NAN
         };
+        time.sdrmssd = time.sdnn / time.rmssd;
     } else {
         time.rmssd = f64::NAN;
         time.ln_rmssd = f64::NAN;
+        time.sdrmssd = f64::NAN;
         time.sdsd = f64::NAN;
         time.pnn50 = f64::NAN;
         time.pnn20 = f64::NAN;

@@ -23,6 +23,10 @@ pub struct NonLinear {
     /// Kardiyak sempatik ve vagal indeksler
     pub csi: f64,
     pub cvi: f64,
+    /// Modified CSI (Jeppesen 2014): `(4·SD2)² / (4·SD1)`
+    pub csi_modified: f64,
+    /// Area of the Poincaré ellipse `π · SD1 · SD2` (ms²)
+    pub s: f64,
     /// Örnek ve yaklaşık entropi (m = 2, r = 0.2 × SDNN)
     pub sampen: f64,
     pub apen: f64,
@@ -90,6 +94,12 @@ pub fn hrv(rri: &[f64]) -> HrvReport {
             sd1_sd2: poincare.as_ref().map_or(nan, |p| p.sd1 / p.sd2),
             csi: poincare.as_ref().map_or(nan, |p| p.csi),
             cvi: poincare.as_ref().map_or(nan, |p| p.cvi),
+            csi_modified: poincare
+                .as_ref()
+                .map_or(nan, |p| (4.0 * p.sd2).powi(2) / (4.0 * p.sd1)),
+            s: poincare
+                .as_ref()
+                .map_or(nan, |p| std::f64::consts::PI * p.sd1 * p.sd2),
             sampen,
             apen,
             dfa_alpha1: dfa.as_ref().map_or(nan, |d| d.alpha1),
@@ -184,6 +194,8 @@ impl HrvReport {
             sd1_sd2: nan,
             csi: nan,
             cvi: nan,
+            csi_modified: nan,
+            s: nan,
             sampen: nan,
             apen: nan,
             dfa_alpha1: nan,

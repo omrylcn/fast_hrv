@@ -262,9 +262,9 @@ let accept = w.artifact_ratio() <= 0.02 && w.kept_nn >= 40 && w.kept_share() >= 
 
 | Group | Metrics |
 |---|---|
-| Time domain | MeanNN, SDNN, RMSSD, lnRMSSD, SDSD, pNN50, pNN20, MedianNN, MadNN, IQRNN, MinNN, MaxNN, CVNN, CVSD, MeanHR, SDHR, HTI, TINN |
+| Time domain | MeanNN, SDNN, RMSSD, lnRMSSD, SDSD, SDRMSSD, pNN50, pNN20, MedianNN, MadNN, IQRNN, Prc20NN, Prc80NN, MinNN, MaxNN, CVNN, CVSD, MeanHR, SDHR, HTI, TINN, Baevsky stress index (and √SI) |
 | Frequency domain: Welch on 4 Hz cubic-spline resampling (`frequency_domain`), or Lomb–Scargle on the uneven beat times (`frequency_domain_lomb`) | VLF, LF, HF, lnHF, total power, LF/HF, LFnu, HFnu, LF peak, HF peak |
-| Nonlinear | SD1, SD2, SD1/SD2, CSI, CVI, SampEn, ApEn, DFA α1, DFA α2 |
+| Nonlinear | SD1, SD2, SD1/SD2, S (ellipse area), CSI, CSI modified, CVI, SampEn, ApEn, DFA α1, DFA α2 |
 | Asymmetry | GI, PI, SD1d, SD1a, C1d, C1a |
 | Fragmentation (Costa 2017, NeuroKit2 definitions) | PIP, IALS, PSS, PAS |
 
@@ -321,6 +321,8 @@ SciPy 1.18.1, NumPy 2.5.5, pandas 3.1.1.
 | LF, HF, LF/HF, LFnu (records ≥ 5 min) | `nk.hrv_frequency(normalize=False)` | ≤ 24 % observed, test tolerance 30 % (different interpolation and Welch settings) |
 | lnHF | `nk.hrv_frequency` `HRV_LnHF` | ≤ 2.0 % observed (same method difference as HF, on the log scale) |
 | PIP, IALS, PSS, PAS | `nk.hrv_nonlinear` | ≤ 1.4e-16 (identical definitions) |
+| SDRMSSD, Prc20NN, Prc80NN, S, CSI modified | `nk.hrv_time` / `hrv_nonlinear` | ≤ 2.2e-15 |
+| Baevsky stress index | hand-computed (no NeuroKit2 equivalent; Kubios definitions without VLF detrending) | exact |
 | Breathing rate from ECG (2 × 120 s ECGSYN, 15/min) | `nk.ecg_simulate(method="ecgsyn")` respiratory component (`tools/respiration_reference.py`) | 5/6 windows valid, ≤ 0.7/min error; 1 rejected by the AM/FM agreement rule |
 | Lomb–Scargle periodogram (4 series, 120–600 s, with 0–10 % dropped intervals) | `astropy.timeseries.LombScargle(fit_mean=False, normalization="psd")` 8.0.3 (`tools/lomb_reference.py`) | ≤ 1e-9 of the peak |
 | VLF, TINN, DFA α1/α2 | — | not comparable (different definitions; see `tests/neurokit_parity.rs`) |

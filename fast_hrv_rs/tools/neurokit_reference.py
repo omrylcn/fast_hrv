@@ -44,12 +44,14 @@ TIME = {
     "HRV_pNN50": "time.pnn50_nk", "HRV_pNN20": "time.pnn20_nk", "HRV_MedianNN": "time.median_nn",
     "HRV_MadNN": "time.mad_nn", "HRV_IQRNN": "time.iqr_nn", "HRV_MinNN": "time.min_nn", "HRV_MaxNN": "time.max_nn",
     "HRV_CVNN": "time.cvnn", "HRV_CVSD": "time.cvsd", "HRV_HTI": "time.hti", "HRV_TINN": "time.tinn",
+    "HRV_SDRMSSD": "time.sdrmssd", "HRV_Prc20NN": "time.prc20_nn", "HRV_Prc80NN": "time.prc80_nn",
 }
 FREQ = {"HRV_VLF": "frequency.vlf", "HRV_LF": "frequency.lf", "HRV_HF": "frequency.hf", "HRV_LFHF": "frequency.lf_hf",
         "HRV_LnHF": "frequency.lnhf"}
 NONLINEAR = {
     "HRV_SD1": "nonlinear.sd1", "HRV_SD2": "nonlinear.sd2", "HRV_SD1SD2": "nonlinear.sd1_sd2",
-    "HRV_CSI": "nonlinear.csi", "HRV_CVI": "nonlinear.cvi", "HRV_SampEn": "nonlinear.sampen",
+    "HRV_CSI": "nonlinear.csi", "HRV_CVI": "nonlinear.cvi", "HRV_CSI_Modified": "nonlinear.csi_modified",
+    "HRV_S": "nonlinear.s", "HRV_SampEn": "nonlinear.sampen",
     "HRV_ApEn": "nonlinear.apen", "HRV_DFA_alpha1": "nonlinear.dfa_alpha1", "HRV_DFA_alpha2": "nonlinear.dfa_alpha2",
     "HRV_GI": "asymmetry.gi", "HRV_PI": "asymmetry.pi", "HRV_SD1d": "asymmetry.sd1d", "HRV_SD1a": "asymmetry.sd1a",
     "HRV_C1d": "asymmetry.c1d", "HRV_C1a": "asymmetry.c1a",

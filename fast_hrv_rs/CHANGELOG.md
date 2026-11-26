@@ -2,6 +2,20 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.0] - unreleased
+
+### Added
+- Baevsky stress index: `TimeDomain::stress_index` (`SI = AMo / (2 · Mo · MxDMn)`, Kubios definitions: Mo =
+  median NN, AMo = share in the tallest 50 ms bin, MxDMn = max − min) and `stress_index_sqrt` (the form Kubios
+  reports). No VLF detrending (Kubios applies smoothness priors first), so it matches Kubios on stationary
+  windows. Hand-computed tests; documented as artifact-sensitive and not a stress diagnosis.
+- NeuroKit2 metrics that were missing: `TimeDomain::sdrmssd`, `prc20_nn`, `prc80_nn`; `NonLinear::s` (Poincaré
+  ellipse area), `csi_modified`. Identical to NeuroKit2 (≤ 2.2e-15).
+- `METRICS` rows for the new fields.
+
+### Changed (breaking for struct literals)
+- New public fields on `TimeDomain` and `NonLinear`.
+
 ## [0.8.0] - unreleased
 
 ### Added
