@@ -1,486 +1,371 @@
-# fast_hrv
+# fast-hrv
 
-**Yüksek performanslı HRV (Heart Rate Variability) analiz kütüphanesi.**
+Fast, dependency-light **heart rate variability (HRV)** analysis from ECG, in Rust.
 
-ECG sinyallerinden R-peak tespiti, artifact düzeltme ve HRV metriklerini hesaplar. Üç farklı kullanım seçeneği sunar:
-
-| Seçenek | Dil | Hız | Kullanım Kolaylığı |
-|---------|-----|-----|-------------------|
-| **fast_hrv** | Python + Numba | Hızlı | En kolay |
-| **fast_hrv_rs** (Python binding) | Python → Rust | En hızlı | Kolay |
-| **fast_hrv_rs** (Native) | Pure Rust | En hızlı | Rust bilgisi gerekli |
-
-## Performans Karşılaştırması
-
-| Süre | NeuroKit2 | fast_hrv (Python) | Rust | Hız Kazanımı |
-|------|-----------|-------------------|------|--------------|
-| 30s  | 356 ms    | 3.6 ms            | 0.5 ms | **713x** |
-| 60s  | 685 ms    | 3.9 ms            | 1.1 ms | **646x** |
-| 180s | 2035 ms   | 7.1 ms            | 3.5 ms | **582x** |
-| 360s | 4139 ms   | 10.9 ms           | 7.5 ms | **554x** |
-
----
-
-# Seçenek 1: fast_hrv (Pure Python + Numba)
-
-Rust bilmeden hızlı HRV analizi. Numba JIT compilation ile optimize edilmiş.
-
-## Kurulum
-
-```bash
-pip install numpy numba neurokit2
-```
-
-## Kullanım
-
-```python
-from fast_hrv.ecg_numba import process_ecg
-
-# ECG sinyali (numpy array)
-ecg_signal = load_your_ecg_data()
-sampling_rate = 512
-
-# Tek satırda tam analiz
-result = process_ecg(ecg_signal, sampling_rate=sampling_rate, correct_artifacts=True)
-
-# Sonuçlar
-print(f"R-peak sayısı: {len(result['rpeaks'])}")
-print(f"Ortalama HR: {result['stats']['mean_hr_bpm']:.1f} bpm")
-print(f"SDNN: {result['stats']['sdnn_ms']:.2f} ms")
-print(f"RMSSD: {result['stats']['rmssd_ms']:.2f} ms")
-print(f"pNN50: {result['stats']['pnn50']:.2f}%")
-
-# Temizlenmiş sinyal ve kalite skoru
-ecg_cleaned = result['ecg_cleaned']
-quality = result['quality']  # 0-1 arası kalite skoru
-```
-
-### Adım Adım İşleme
-
-```python
-import numpy as np
-from neurokit2.ecg import ecg_clean
-from fast_hrv.peaks_numba import ecg_peaks
-from fast_hrv.ecg_numba import compute_quality
-
-# 1. Sinyal temizleme (NeuroKit2 Butterworth filter)
-ecg_cleaned = ecg_clean(ecg_signal, sampling_rate=512, method="neurokit")
-
-# 2. Peak tespiti + artifact düzeltme
-signals, info = ecg_peaks(ecg_cleaned, sampling_rate=512, correct_artifacts=True)
-rpeaks = info["ECG_R_Peaks"]
-
-# 3. Kalite değerlendirmesi
-quality, quality_per_beat = compute_quality(ecg_cleaned, rpeaks, sampling_rate=512)
-
-# 4. HRV metrikleri
-rr_ms = np.diff(rpeaks) / 512 * 1000
-sdnn = np.std(rr_ms, ddof=1)
-rmssd = np.sqrt(np.mean(np.diff(rr_ms) ** 2))
-```
-
-### Sadece HRV Metrikleri
-
-```python
-from fast_hrv.hrv import get_hrv_features
-
-# RR intervalleri (ms cinsinden)
-rr_intervals = np.array([800.0, 812.5, 795.3, 810.1, 802.7, 815.9])
-
-# Tüm HRV metrikleri
-hrv = get_hrv_features(rr_intervals)
-
-print(f"SDNN: {hrv['sdnn']:.2f} ms")
-print(f"RMSSD: {hrv['rmssd']:.2f} ms")
-print(f"pNN50: {hrv['pnn50']:.2f}%")
-print(f"SampEn: {hrv['sampen']:.4f}")
-print(f"DFA α1: {hrv['dfa_alpha1']:.3f}")
-print(f"SD1: {hrv['sd1']:.2f} ms")
-print(f"SD2: {hrv['sd2']:.2f} ms")
-```
-
----
-
-# Seçenek 2: fast_hrv_rs Python Binding (PyO3 + Maturin)
-
-Rust performansını Python'dan kullan. PyO3 ile native binding.
-
-## Kurulum
-
-```bash
-# Maturin kurulumu
-pip install maturin
-
-# Rust binding'i derle ve kur
-cd fast_hrv_rs
-maturin develop --release
-```
-
-## Cargo.toml Ayarları
-
-```toml
-[lib]
-name = "fast_hrv_rs"
-crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-pyo3 = { version = "0.20", features = ["extension-module"] }
-numpy = "0.20"
-```
-
-## Python'dan Kullanım
-
-```python
-import numpy as np
-import fast_hrv_rs  # Rust modülü
-
-# ECG sinyali
-ecg_signal = np.random.randn(30720)  # 60s @ 512Hz
-sampling_rate = 512
-
-# Rust fonksiyonlarını çağır
-result = fast_hrv_rs.process_ecg(ecg_signal, sampling_rate, correct_artifacts=True)
-
-print(f"R-peaks: {len(result.rpeaks)}")
-print(f"Mean HR: {result.stats.mean_hr_bpm:.1f} bpm")
-print(f"RMSSD: {result.stats.rmssd_ms:.2f} ms")
-
-# Sadece HRV metrikleri
-rr = np.array([800.0, 810.0, 795.0, 805.0])
-rmssd = fast_hrv_rs.compute_rmssd(rr)
-sdnn = fast_hrv_rs.std_ddof(rr, 1)
-sampen = fast_hrv_rs.compute_sampen(rr, 2, 0.2)
-```
-
-## PyO3 Binding Kodu
-
-`src/python.rs` dosyası oluştur:
+- **Signal:** Butterworth filter design (SciPy-equivalent), NeuroKit2-compatible zero-phase ECG cleaning,
+  a causal **streaming** filter for packet-by-packet processing, R-peak detection (NeuroKit2 method and
+  Elgendi two-moving-average detector), sub-sample R-peak refinement, a dual-detector API with bSQI,
+  windowed processing of long recordings and a **streaming** detector with exactly the same output,
+  Kubios artifact correction (NeuroKit2-equivalent; per-beat changed/inserted/removed result, also on sub-sample positions),
+  an **exclusion mode** as the alternative to correction (ectopic / suspect beat classes, NN validity mask,
+  artifact ratio, RMSSD from adjacent valid NN pairs), gap-aware RR intervals
+- **Signal quality (`sqi`):** absolute indices: flat line, saturation, kSQI, pSQI, basSQI (Zhao & Zhang 2018),
+  bSQI (detector agreement), template correlation, RR plausibility, zhao2018 fusion; plus the relative
+  per-beat `compute_quality` (NeuroKit2 averageQRS)
+- **HRV metrics:** time domain (17), frequency domain (9), nonlinear (9), asymmetry (6)
+- **No heavy dependencies:** filters, FFT and spline are implemented in the crate; plain scalar `f64` code,
+  no CPU-specific instructions (no AVX assumed, no `target-cpu=native`)
+- Optional: `serde` serialization, Python bindings (PyO3)
 
 ```rust
-use pyo3::prelude::*;
-use numpy::{PyArray1, PyReadonlyArray1};
-
-#[pyfunction]
-fn process_ecg_py(
-    py: Python<'_>,
-    signal: PyReadonlyArray1<f64>,
-    sampling_rate: u32,
-    correct_artifacts: bool,
-) -> PyResult<PyObject> {
-    let signal = signal.as_slice()?;
-    let result = crate::process_ecg(signal, sampling_rate, correct_artifacts);
-
-    // Python dict'e çevir
-    let dict = pyo3::types::PyDict::new(py);
-    dict.set_item("rpeaks", result.rpeaks)?;
-    dict.set_item("mean_hr_bpm", result.stats.mean_hr_bpm)?;
-    dict.set_item("sdnn_ms", result.stats.sdnn_ms)?;
-    dict.set_item("rmssd_ms", result.stats.rmssd_ms)?;
-    dict.set_item("pnn50", result.stats.pnn50)?;
-    Ok(dict.into())
-}
-
-#[pyfunction]
-fn compute_rmssd_py(rr: PyReadonlyArray1<f64>) -> PyResult<f64> {
-    Ok(crate::compute_rmssd(rr.as_slice()?))
-}
-
-#[pyfunction]
-fn compute_sampen_py(data: PyReadonlyArray1<f64>, m: usize, r: f64) -> PyResult<f64> {
-    Ok(crate::compute_sampen(data.as_slice()?, m, r))
-}
-
-#[pymodule]
-fn fast_hrv_rs(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(process_ecg_py, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_rmssd_py, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_sampen_py, m)?)?;
-    Ok(())
-}
+let rri = fast_hrv::rri_from_peaks(&peaks, 512);   // R-peak indices → NN intervals (ms)
+let r = fast_hrv::hrv(&rri);
+println!("SDNN {:.1} ms  RMSSD {:.1} ms  LF/HF {:.2}  SampEn {:.2}",
+         r.time.sdnn, r.time.rmssd, r.frequency.lf_hf, r.nonlinear.sampen);
 ```
 
----
+## ECG cleaning
 
-# Seçenek 3: fast_hrv_rs (Native Rust)
+| Function | Use | What it does |
+|---|---|---|
+| `ecg_clean`, `ecg_clean_neurokit` | offline | `nk.ecg_clean(method="neurokit")`: 0.5 Hz high-pass Butterworth order 5, zero-phase (`sosfiltfilt` with SciPy's padding), then NeuroKit's powerline moving average of `int(fs/50)` samples (`filtfilt`) |
+| `EcgStreamFilter`, `ecg_clean_causal` | live / offline | causal 0.5 Hz high-pass (order 2) + 40 Hz low-pass (order 4), optional notch (`EcgFilterConfig::with_notch(50.0, q)`); state carried across packets |
+| `ecg_clean_zero_phase` | offline | the same configurable band, zero-phase with SciPy-style padding |
+| `filter::{butter_sos, iirnotch, sosfilt, sosfiltfilt, filtfilt_ba, SosFilter}` | building blocks | SciPy `butter(..., output="sos")`, `iirnotch`, `sosfilt`, `sosfiltfilt`, `filtfilt` |
 
-Maksimum performans için pure Rust kullanımı.
-
-## Kurulum
-
-```bash
-# Standart build
-cargo build --release
-
-# SIMD optimizasyonları ile
-cargo build --release --features simd
-
-# Paralel işleme ile
-cargo build --release --features parallel
-
-# Tüm özellikler
-cargo build --release --features all
-```
-
-## Kullanım
-
-### Temel Kullanım
+Live and offline processing give the same result: feeding a signal to `EcgStreamFilter` in packets of any
+size (e.g. 32 samples) is **bit-identical** to `ecg_clean_causal` on the whole signal (`tests/streaming.rs`).
 
 ```rust
-use fast_hrv_rs::*;
+use fast_hrv::ecg::{EcgFilterConfig, EcgStreamFilter};
+let mut f = EcgStreamFilter::new(512.0, &EcgFilterConfig::default().with_notch(50.0, 30.0))?;
+for packet in packets { let clean = f.process(packet); /* … */ }
+```
 
-fn main() {
-    let ecg_signal: Vec<f64> = load_ecg_data();
-    let sampling_rate = 512;
+## R-peak detection
 
-    // Tam pipeline
-    let result = process_ecg(&ecg_signal, sampling_rate, true);
+| Function | What it does |
+|---|---|
+| `find_peaks_default` | NeuroKit2's default `neurokit` method (smoothed gradient, QRS regions, 0.3 s minimum delay) |
+| `detect::elgendi_peaks` + `ElgendiConfig` | Elgendi two-moving-average detector: 8–20 Hz Butterworth (order 2, causal as NeuroKit2), squared signal, 97 ms / 611 ms moving averages, threshold offset β = 0.08 · mean, minimum block = QRS window (Elgendi 2013), 0.3 s refractory. Presets `ElgendiConfig::neurokit2013()` / `neurokit2010()` reproduce NeuroKit2's `elgendi2013` / `elgendi2010` exactly |
+| `detect::refine_peaks` + `RefineConfig` | moves candidate peaks (any detector) to the R extremum of the clean signal within ±50 ms (configurable), polarity `Auto` (one sign per window, majority vote), `Positive`, `Negative` or `Absolute`; 3-point parabolic interpolation gives sub-sample positions |
+| `rri_from_positions`, `rri_from_times` | RR intervals (ms) from sub-sample positions or times in seconds (the integer `rri_from_peaks` is unchanged) |
+| `detect::dual_detect` + `DualConfig` | primary (Elgendi + refinement) and secondary (NeuroKit2 method) peaks on the same window and their bSQI (tolerance 0.15 s by default, 0.05 s variant documented); results only, no gate |
+| `detect::detect_windowed`, `elgendi_refined_windowed` + `WindowConfig` | long recordings in fixed windows (default 10 s + 2 s margin each side) anchored at absolute sample indices; the detector restarts in every window and overlap duplicates are removed deterministically, so the output does not depend on where the recording starts |
+| `detect::dual_detect_windowed` | both detectors of `dual_detect` over a long recording in the same windows (primary and secondary positions, each de-duplicated) |
+| `stream::StreamDetector` + `StreamConfig` | the windowed pipeline packet by packet (see below): same peaks as `elgendi_refined_windowed` / `dual_detect_windowed`, bit for bit |
 
-    println!("R-peak sayısı: {}", result.rpeaks.len());
-    println!("Ortalama HR: {:.1} bpm", result.stats.mean_hr_bpm);
-    println!("SDNN: {:.2} ms", result.stats.sdnn_ms);
-    println!("RMSSD: {:.2} ms", result.stats.rmssd_ms);
+The default Elgendi detector (causal 8–20 Hz filter) reports beats ~37 ms after the R peak; the
+refinement removes this delay (synthetic signals with known R: every refined peak within 0.4 samples).
+NeuroKit2's `elgendi2010` is ~80 ms late and needs a refinement window of at least 0.09 s.
+Run long recordings through `detect_windowed`: the Elgendi offset (β · mean energy) is computed over the
+analysed input, so a single pass over a long, artifact-laden recording can miss many beats.
+
+```rust
+use fast_hrv::detect::{DualConfig, RefineConfig, ElgendiConfig, dual_detect, elgendi_peaks, refine_peaks};
+let clean = fast_hrv::ecg_clean_zero_phase(&raw, 512.0, &fast_hrv::EcgFilterConfig::default())?; // 0.5–40 Hz
+let cand = elgendi_peaks(&clean, 512.0, &ElgendiConfig::default())?;
+let r = refine_peaks(&clean, 512.0, &cand, &RefineConfig::default())?;
+let rri = fast_hrv::rri_from_positions(&r.positions, 512.0);          // sub-sample RR (ms)
+let d = dual_detect(&clean[..5120], 512.0, &DualConfig::default())?;   // one 10 s window
+println!("bSQI {:?}", d.bsqi.map(|b| b.bsqi));
+```
+
+### Streaming detection
+
+`StreamDetector` takes clean samples (e.g. from `EcgStreamFilter`) in packets of any size and processes
+each 10 s window as soon as its 2 s right margin has arrived. It emits confirmed peaks (absolute sample
+index + sub-sample position) of the primary detector and, by default, of the secondary detector. For a
+segment starting at absolute index `s0`, the emitted peaks are **bit-identical** to
+`elgendi_refined_windowed` / `dual_detect_windowed` on the same samples with `start_sample = s0`, for any
+packetisation (tested with 1, 32, 33, 512, 7168 and random packet sizes, several start offsets, gaps and a
+30 min run with artifacts: `tests/stream_detect.rs`).
+
+- **Latency** (defaults): a peak is emitted 2.3–12 s after the R peak (window + margin; ~7 s on average);
+  a peak in the last ~0.3 s of a window may be a duplicate of the next window's and waits for it, worst
+  case window + margin + 2 · dedup ≈ 12.3 s (`max_latency_samples()`).
+- **State**: one buffer of at most window + 2 · margin samples (14 s, 56 KiB at 512 Hz) plus pending peaks:
+  `state_bytes()` = 59.9 KiB per stream at 512 Hz (500 streams ≈ 29 MiB), constant over time. The buffer
+  is the chunk the detectors read; `push_with` gives each processed window (samples, its own detections,
+  bSQI) to a callback, e.g. for signal quality on the core, so no second sample ring is needed.
+- **Gaps**: `reset_at(next_index)` ends the segment (its last windows are processed with clipped chunks,
+  as the batch path does at the end of a recording) and returns the `Gap` for `gaps::split_at_gaps`.
+  `flush()` ends the recording.
+
+```rust
+use fast_hrv::stream::{StreamConfig, StreamDetector, StreamPeaks};
+let mut filt = fast_hrv::EcgStreamFilter::new(512.0, &fast_hrv::EcgFilterConfig::default())?;
+let mut det = StreamDetector::new(512.0, session_start_index, StreamConfig::default())?;
+let mut out = StreamPeaks::default();
+for packet in packets {                     // 32 raw samples
+    det.push(&filt.process(packet), &mut out)?;
+    // out.primary / out.secondary: confirmed peaks (index: u64, position: f64)
 }
+// A gap (connection lost, timestamps jump): close the segment and restart the filter state.
+let gap = det.reset_at(det.next_index() + gap_samples, &mut out)?;
+filt.reset();
+// ... keep pushing packets of the next segment ...
+det.flush(&mut out)?;
+// RR per segment from sub-sample positions (never across `gap`):
+let rri = fast_hrv::rri_from_positions(&positions_of_one_segment, 512.0);
 ```
 
-### Adım Adım İşleme
+A complete runnable version (two segments with a gap, a `push_with` callback, RR and RMSSD per segment)
+is in [`examples/streaming.rs`](examples/streaming.rs): `cargo run --release --example streaming`.
+
+**Reprocessing history must use the same causal path** (`EcgStreamFilter`, reset at every gap, then
+`StreamDetector` or `dual_detect_windowed` on that output) to reproduce the live peaks. Cleaning history
+with the zero-phase filter shifts peaks by ~8–10 ms; on noisy real recordings 16–26 % of them then no
+longer match the live peaks within 50 ms.
+
+## Artifact correction (Kubios)
+
+`fix_peaks_with(peaks, fs, &KubiosParams::default())` runs the Lipponen–Tarvainen (2019) detection and
+correction as NeuroKit2 `signal_fixpeaks(method="Kubios")` does (same output on the fixtures), iterating
+while the number of flags decreases. `KubiosOutput` holds the corrected peaks, the artifact flags
+(`artifacts`, cumulative over passes, and `passes`) and **`corrections`**: what really changed, decided by
+comparing the output with the input.
+
+- `corrections.status[j]` per output beat: `Unchanged` (same position as an input beat, also when it was
+  flagged and ended where it started), `Moved` (ectopic or long/short correction), `Inserted` (missed beat);
+  `corrections.removed` counts deleted (extra) input beats, which have no output beat;
+  `input_to_output` / `output_to_input()` map between the two.
+- **Gate on `changed_ratio()`** = (moved + inserted) / output beats, with removed beats reported separately
+  (`removed_count()`). Do **not** use `artifacts.total_count() / n`: it counts flags of every pass,
+  including flags that change nothing; on real wearable data it was 2–5× the share of beats actually changed.
+- Segmented recordings: `gaps::segment_changed_counts`, `total_changed`, `total_removed`,
+  `overall_changed_ratio` over the outputs of `fix_peaks_segmented`.
+- Kubios has known blind spots that a ratio cannot show (a compensated premature beat moves two beats; at
+  ~15 % artifacts the quartile thresholds inflate and it reports almost nothing): combine the ratio with a
+  residual RR check and signal-quality gates.
 
 ```rust
-use fast_hrv_rs::*;
-
-// 1. Sinyal temizleme
-let cleaned = ecg_clean(&ecg_signal, sampling_rate);
-
-// 2. Peak tespiti
-let peaks = find_peaks_default(&cleaned, sampling_rate);
-
-// 3. Artifact düzeltme
-let (fixed_peaks, artifacts) = fix_peaks_default(&peaks, sampling_rate);
-
-// 4. Kalite hesaplama
-let (quality, quality_per_beat) = compute_quality(&cleaned, &fixed_peaks, sampling_rate);
-
-// 5. İstatistikler
-let stats = compute_stats(&fixed_peaks, &quality_per_beat, sampling_rate);
+let out = fast_hrv::fix_peaks_with(&peaks, 512.0, &fast_hrv::KubiosParams::default())?;
+let ratio = out.changed_ratio();            // share of output beats actually changed
+let removed = out.corrections.removed_count();
 ```
 
-### HRV Metrikleri
+**Sub-sample positions.** `fix_positions_with(positions, fs, params)` runs the same algorithm on `f64`
+positions (RR from the positions), so refined peaks need not be rounded: unchanged beats keep their
+sub-sample positions bit for bit, inserted and moved beats go to the exact midpoint of their neighbours,
+and the result (`KubiosPositions`) carries the same `corrections`. With `KubiosMidpoint::Floor`
+(`fix_positions_with_midpoint`) integer-valued positions give results bit-identical to `fix_peaks_with`
+(and NeuroKit2). Shortcuts: `RefinedPeaks::fix_kubios`, `stream::fix_stream_peaks` (one gap-free segment
+of `StreamPeak`s), `gaps::fix_positions_segmented`, and `KubiosPositions::rri_ms(fs)` for the RR.
+Integer RR series contain exact ties at some decision boundaries, so a sub-sample series can differ from
+its rounded version in a few borderline flags (6 of 26 fixture series with ±0.45-sample offsets, same total
+number of changes).
 
 ```rust
-use fast_hrv_rs::*;
-
-let rr = vec![800.0, 812.5, 795.3, 810.1, 802.7, 815.9];
-
-// Time-domain
-let sdnn = std_ddof(&rr, 1);
-let rmssd = compute_rmssd(&rr);
-let pnn50 = compute_pnn50(&rr);
-
-// Nonlinear
-let sampen = compute_sampen(&rr, 2, 0.2);
-let alpha1 = compute_dfa_alpha1(&rr);
-
-// Poincaré
-let sd1 = compute_poincare_sd1(&rr);
-let sd2 = compute_poincare_sd2(&rr);
+let r = refine_peaks(&clean, 512.0, &cand, &RefineConfig::default())?;
+let fixed = r.fix_kubios(512.0, &fast_hrv::KubiosParams::default())?;
+let rri = fixed.rri_ms(512.0);              // corrected sub-sample RR (ms)
+let gate_ok = fixed.changed_ratio() <= 0.02;   // e.g. a 60 s window; the threshold is yours
 ```
 
----
-
-# Modül Yapısı
-
-```
-fast_hrv/                    # Python paketi
-├── __init__.py
-├── ecg_numba.py            # Numba-optimized ECG processing
-├── peaks_numba.py          # Peak detection + artifact correction
-├── hrv.py                  # HRV metrics
-└── utils.py                # Utility functions
-
-fast_hrv_rs/                 # Rust paketi
-├── src/
-│   ├── lib.rs              # Ana modül, public API
-│   ├── ecg.rs              # ECG işleme (clean, quality, stats)
-│   ├── peaks.rs            # Peak tespiti ve artifact düzeltme
-│   ├── hrv.rs              # HRV metrikleri
-│   ├── simd.rs             # SIMD optimizasyonları (opsiyonel)
-│   └── python.rs           # PyO3 bindings (opsiyonel)
-└── Cargo.toml
-```
-
----
-
-# Özellikler
-
-## ECG İşleme
-- **Sinyal Temizleme**: Butterworth bandpass filter (0.5-40 Hz)
-- **R-Peak Tespiti**: NeuroKit2 algoritması (gradient-based)
-- **Artifact Düzeltme**: Kubios metodu (Lipponen & Tarvainen 2019)
-- **Kalite Değerlendirmesi**: Template matching ile beat kalitesi
-
-## HRV Metrikleri
-
-| Kategori | Metrikler |
-|----------|-----------|
-| Time-domain | SDNN, RMSSD, pNN50, pNN20, SDSD, Mean HR |
-| Nonlinear | ApEn, SampEn, DFA α1 |
-| Poincaré | SD1, SD2, SD1/SD2, CSI, CVI |
-| Asymmetry | C1d, C1a, SD1d, SD1a, Cd, Ca, SDNNd, SDNNa |
-
----
-
-# Algoritmalar
-
-## Peak Tespiti (NeuroKit2 Metodu)
-
-```
-1. Gradient hesapla (merkezi farklar)
-2. Gradient karesi al
-3. Moving average uygula (window = 0.2s)
-4. Lokal maksimumları bul
-5. Minimum mesafe filtresi (0.3s)
-```
-
-## Artifact Düzeltme (Kubios Metodu)
-
-Lipponen & Tarvainen (2019) algoritması:
-
-```
-1. dRR = RR[i] - RR[i-1]
-2. mRR = median_filter(RR, window=11)
-3. Thresholds:
-   - th1 = 0.13 * mRR (short/long)
-   - th2 = 0.17 (ectopic)
-4. Artifact detection via pattern analysis
-5. Correction:
-   - Ectopic → interpolate
-   - Extra → remove
-   - Missed → insert new peak
-```
-
-## SIMD Optimizasyonu
+**Parameters.** `KubiosParams` defaults are the published values (`alpha` 5.2, `c1` 0.13, `c2` 0.17,
+91-beat quartile window, 11-beat median) and give NeuroKit2 parity. `alpha` scales both time-varying
+thresholds (larger = fewer flags). `threshold_floor_s` (default `0.0` = off, bit-identical to the
+published algorithm) is an absolute lower bound in seconds on both thresholds (Th1 for dRR, Th2 for mRR):
+on very regular, low-HRV series the quartile thresholds shrink to a few milliseconds and small fiducial
+jitter gets flagged and moved; a floor stops that. Th2 is also the missed/extra tolerance, which the floor
+widens too.
 
 ```rust
-// 2.5x faster with 4-wide unrolling
-for i in (0..n).step_by(4) {
-    sum0 += data[i];
-    sum1 += data[i+1];
-    sum2 += data[i+2];
-    sum3 += data[i+3];
-}
+let p = fast_hrv::KubiosParams { alpha: 6.0, threshold_floor_s: 0.040, ..Default::default() };
 ```
 
----
+## Exclusion instead of correction
 
-# Doğruluk Karşılaştırması
+Kubios correction moves flagged beats to the midpoint of their neighbours. For a **compensated premature
+beat** that is wrong: the beat is real, and moving it (often together with a neighbour) leaves 50–100 ms
+steps in the NN series. On low-HRV recordings this multiplies RMSSD (synthetic test below: 3 % ectopy, median
+RMSSD error 59 %, 146 % at RMSSD ≈ 10 ms). The exclusion mode classifies beats with the same detection but
+**moves nothing**: the two NN intervals around an ectopic or suspect beat are excluded, and RMSSD uses only
+successive differences of two adjacent valid NN intervals.
 
-Aynı sentetik ECG ile test (30s @ 512Hz):
+```rust
+use fast_hrv::{ExclusionParams, classify_beats};
 
-| Metrik | NeuroKit2 | fast_hrv | Rust | Fark |
-|--------|-----------|----------|------|------|
-| N Peaks | 37 | 37 | 37 | 0% |
-| Mean HR | 74.68 | 74.92 | 74.92 | 0.32% |
-| SDNN | 45.65 | 45.65 | 45.65 | **0%** |
-| RMSSD | 78.66 | 78.66 | 78.66 | **0%** |
-| pNN50 | 62.86 | 62.86 | 62.86 | **0%** |
-
-HRV metrikleri birebir aynı.
-
----
-
-# Hangi Seçeneği Kullanmalıyım?
-
-| Durum | Öneri |
-|-------|-------|
-| Hızlı prototipleme, Jupyter notebook | **fast_hrv (Python)** |
-| Production, yüksek throughput | **fast_hrv_rs (Python binding)** |
-| Embedded, real-time, başka Rust projesi | **fast_hrv_rs (Native)** |
-| NeuroKit2 ile uyumluluk gerekli | **fast_hrv (Python)** |
-
----
-
-# Benchmark Çalıştırma
-
-```bash
-# Python benchmark
-python -c "
-from fast_hrv.ecg_numba import process_ecg
-import numpy as np
-import time
-
-ecg = np.random.randn(30720)
-start = time.time()
-for _ in range(100):
-    process_ecg(ecg, 512)
-print(f'{(time.time()-start)/100*1000:.2f} ms per call')
-"
-
-# Rust benchmark
-cargo run --release --bin ecg_breakdown
-
-# SIMD benchmark
-cargo run --release --features simd --bin simd_bench
+let out = classify_beats(&positions, 512.0, &ExclusionParams::default(), None)?; // f64 sub-sample positions
+let td = out.time_domain();          // RMSSD / SDSD / pNNx from adjacent valid pairs, MeanNN / SDNN on valid NN
+let rmssd = out.rmssd();             // Option<f64>: None with < 2 valid pairs
+let kept = out.kept_count();         // valid NN; also usable_count(), kept_share()
+let art = out.artifact_ratio();      // artifact events / beats (ectopic beats not counted)
+let ect = out.ectopy_ratio();        // ectopic beats / beats (record it; not an artifact)
+let w = out.summary_between(t0, t1); // the same counts for one window (positions in [t0, t1))
 ```
 
----
+How it works (`exclusion` module docs have the details):
 
-# Testler
+1. **Artifact passes:** Kubios with only the missed (insert at the midpoint) and extra (remove) corrections,
+   iterated; ectopic and long/short flags never move a beat.
+2. **Detection:** a beat is **ectopic** if the Kubios `ectopic` flag maps to it (the beat between the short
+   and the long interval) or if it matches the premature + compensatory pattern
+   `RR[b] ≤ 0.85·m` and `RR[b+1] − m ≥ 0.5·(m − RR[b])` (`m` = centred 11-beat median RR; both factors are
+   parameters). Every other flag makes its beat a **suspect** (long/short or residual missed/extra).
+3. **Two-stage** (default on): detection runs again on a copy with each ectopic beat at its neighbours'
+   midpoint, so the ectopic dRR no longer inflate the thresholds; flags away from the ectopic beats become
+   suspects. The copy is only used for detection.
+4. **NN mask:** an interval is invalid if it is adjacent to an ectopic, suspect or caller-marked
+   disagreement beat, touches an inserted beat, spans a removed beat (only with `exclude_inserted_removed`, default off since 0.6.1)
+   or crosses a physiological split (`physiological_rr_s`, default off). Gap-free segments are processed
+   separately (`classify_segments`, `concat_nn`).
 
-```bash
-# Python testleri
-pytest fast_hrv/tests/
+Per beat: `out.beats[j]` (output beats: `Normal`, `Ectopic`, `Suspect`, `Disagreement`, `Inserted`, with
+the Kubios / pattern source, the suspect stage and the midpoint move a suspect would need) and
+`out.input_classes[i]` (input beats: also `Missed` = a beat was missing after it, `Extra`,
+`PhysiologicalLimit`). The **artifact ratio** counts inserted, removed, physiological events, caller-given
+primary/secondary disagreements (optional `&[bool]` per input beat) and suspects whose midpoint move
+exceeds `suspect_move_s` (default 30 ms); ectopic beats are excluded from it. `classify_peaks` takes integer
+indices. `time_domain_masked(nn_ms, valid)` works on any NN series with a validity mask (a `NaN` entry also
+breaks the series); with every interval valid it equals `time_domain` bit for bit.
 
-# Rust testleri (37 test)
-cargo test
+Accuracy on synthetic series (300 beats, RMSSD ≈ 10 / 20 / 40 ms, `tests/exclusion.rs`):
 
-# Belirli modül
-cargo test hrv::tests
-cargo test peaks::tests
+| Injected | Exclusion (two-stage) RMSSD error | Kubios interpolation RMSSD error |
+|---|---|---|
+| 3 % ectopy + 1 % missed/extra/jitter, 60 series | median 1.0 %, max 4.5 % | median 59 %, p90 150 % |
+| 8 % ectopy + 2 % artifacts, 60 series | median 1.7 %, p90 6.1 % (single-stage: median 143 %) | — |
 
-# SIMD testleri
-cargo test --features simd
+At 8 % ectopy single-stage detection is blind to most extra beats and jitter (acted on 219/360 artifacts;
+two-stage 336/360). With Kubios flags only (`premature_factor = 0`) single-stage excludes 827/1440 ectopic
+beats, two-stage 1175/1440.
+
+> **Example only — product-side settings, not library defaults.** One product measured on its own data
+> (single subject, wearable ECG) and chose: `KubiosParams { alpha: 6.0, ..Default::default() }` (c1/c2
+> default, no threshold floor), two-stage exclusion, `suspect_move_s = 0.030`, primary/secondary
+> disagreement (> 50 ms) passed as `disagreement`, physiological limits `(0.3, 2.0)`; per 60 s window:
+> artifact ratio ≤ 2 %, ≥ 40 kept NN and kept share ≥ 80 %, residual check on the kept NN (none more than
+> 30 % from the window median); per 300 s: ≥ 200 kept NN; ectopy ratio recorded, not gated. These are that
+> product's thresholds; validate your own.
+
+```rust
+// the example settings above, in code
+let params = fast_hrv::ExclusionParams {
+    kubios: fast_hrv::KubiosParams { alpha: 6.0, ..Default::default() },
+    physiological_rr_s: Some((0.3, 2.0)),
+    ..Default::default()
+};
+let out = fast_hrv::classify_beats(&positions, 512.0, &params, Some(&disagreement))?;
+let w = out.summary_between(t_end - 60.0 * 512.0, t_end);
+let accept = w.artifact_ratio() <= 0.02 && w.kept_nn >= 40 && w.kept_share() >= 0.80;
 ```
 
----
+## Gaps
 
-# Bağımlılıklar
+`gaps::split_at_gaps` / `rri_with_gaps` take R-peak sample indices plus `Gap { start, end }` markers
+(or `split_peak_times` with timestamps in seconds) and return segments: no RR interval spans a gap, and
+`fix_peaks_segmented` runs Kubios per segment so no beat is inserted into a gap. Compute metrics per segment.
 
-## Python
-```
-numpy
-numba
-neurokit2
-scipy
-```
+## Metrics
 
-## Rust
-```toml
-[dependencies]
-ordered-float = "4.2"
-rayon = { version = "1.10", optional = true }
-pyo3 = { version = "0.20", optional = true }
-numpy = { version = "0.20", optional = true }
-```
+| Group | Metrics |
+|---|---|
+| Time domain | MeanNN, SDNN, RMSSD, lnRMSSD, SDSD, SDRMSSD, pNN50, pNN20, MedianNN, MadNN, IQRNN, Prc20NN, Prc80NN, MinNN, MaxNN, CVNN, CVSD, MeanHR, SDHR, HTI, TINN, Baevsky stress index (and √SI) |
+| Frequency domain: Welch on 4 Hz cubic-spline resampling (`frequency_domain`), or Lomb–Scargle on the uneven beat times (`frequency_domain_lomb`) | VLF, LF, HF, lnHF, total power, LF/HF, LFnu, HFnu, LF peak, HF peak |
+| Nonlinear | SD1, SD2, SD1/SD2, S (ellipse area), CSI, CSI modified, CVI, SampEn, ApEn, DFA α1, DFA α2 |
+| Asymmetry | GI, PI, SD1d, SD1a, C1d, C1a |
+| Fragmentation (Costa 2017, NeuroKit2 definitions) | PIP, IALS, PSS, PAS |
 
----
+**Lomb–Scargle** (`frequency_domain_lomb(times_s, nn_ms, &opts)`) needs no interpolation: pass only the
+valid intervals at their beat times (e.g. after the exclusion mode, or with short gaps) and nothing is
+filled in. Classical periodogram, density scaled so that a sine of amplitude A gives A²/2 (as Welch);
+grid step 1 / (5 · T) up to 0.5 Hz; same bands, minimum durations and outputs as Welch. The two estimators
+agree within ~15 % on gap-free series; compare values only within one method. About 0.7 ms per 5 min window.
 
-# Referanslar
+**Breathing rate (ECG-derived respiration):** `r_amplitudes(&clean, &peaks, fs)` and
+`respiratory_rate(&beat_times_s, &rr_ms, &r_amp, &RespirationConfig::default())` estimate breaths/min in a
+30–60 s window from the R-amplitude and RR modulations (Lomb–Scargle peak in 0.1–0.5 Hz each; valid only
+when both agree within 4/min, Karlen et al. 2013). Below 9/min the respiratory component falls into the LF
+band; `hf_band_for(rate, 0.1, 0.04)` gives an HF band centred on the breathing rate. Checked on synthetic
+ECG (9–22/min, error ≤ 0.01/min) and NeuroKit2 ECGSYN (15/min, 5 of 6 windows valid, error ≤ 0.7/min); not
+yet validated against a reference respiration signal.
 
-- **NeuroKit2**: Makowski et al. (2021) - "NeuroKit2: A Python toolbox for neurophysiological signal processing"
-- **Artifact Correction**: Lipponen & Tarvainen (2019) - "A robust algorithm for heart rate variability time series artefact correction"
-- **HRV Guidelines**: Task Force (1996) - "Heart rate variability: standards of measurement"
-- **DFA**: Peng et al. (1995) - "Quantification of scaling exponents and crossover phenomena"
-- **Sample Entropy**: Richman & Moorman (2000)
+**Window rules per metric:** `METRICS` / `metric_info("lf_hf")` give, for every field, the shortest
+(`min_s`) and the recommended (`recommended_s`) resting recording length with the source of the numbers, so
+an application can read its window rules from the library instead of copying them.
 
----
+Minimum data (otherwise the metric is `NaN`): time domain ≥ 3 intervals; frequency domain per band
+(sum of RR): HF ≥ 60 s, LF ≥ 120 s, VLF ≥ 300 s (configurable, `FrequencyOptions`); entropy/DFA ≥ 16
+intervals. A constant RR series gives zero band power and `NaN` LF/HF. Inputs containing `NaN` give `NaN`
+results; invalid inputs never panic. Bands follow the Task Force (1996) definitions.
 
-# Lisans
+**These per-band minimums are technical lower limits, not recommendations.** Below them a band cannot be
+estimated at all (about 10 cycles of its lowest frequency, Task Force 1996). For interpretable values use
+longer records: LF and LF/HF ≥ 180 s at the very least (the shortest window with validated agreement against
+5 min records, Shaffer et al. 2019/2020), and ≥ 300 s (the Task Force short-term standard) when they are
+reported or compared. LF/HF is not a sympathovagal-balance or stress index (Billman 2013; Quigley et al.
+2024). Raise the limits per application with `FrequencyOptions`, e.g. `min_duration_lf_s: 300.0`.
 
-MIT
+## Accuracy
 
-# Katkıda Bulunma
+Checked in `cargo test` against reference values generated at development time with SciPy and NeuroKit2
+(`tools/*.py`; the versions are recorded in each JSON file under `tests/data/`). All test data is synthetic
+(formulas or `nk.ecg_simulate`); no real recordings are used. Current references: NeuroKit2 0.3.0,
+SciPy 1.18.1, NumPy 2.5.5, pandas 3.1.1.
 
-1. Fork edin
-2. Feature branch: `git checkout -b feature/amazing-feature`
-3. Commit: `git commit -m 'Add amazing feature'`
-4. Push: `git push origin feature/amazing-feature`
-5. Pull Request açın
+| Component | Reference | Result |
+|---|---|---|
+| Butterworth SOS coefficients (20 designs: low/high/band-pass/band-stop, orders 1–8) | `scipy.signal.butter(output="sos")` | max error 2.2e-16 |
+| `sosfiltfilt`, `filtfilt`, `iirnotch` | SciPy | ≤ 5e-13 relative |
+| `ecg_clean` on 512 Hz simulated ECG (clean, noisy, powerline + baseline) | `nk.ecg_clean(method="neurokit")` | ≤ 2.7e-13 relative |
+| R-peaks on the same signals | `nk.ecg_peaks` | 69/69 identical |
+| Elgendi 8–20 Hz filter (5 simulated 30 s signals: clean, noisy, powerline + baseline, 140 bpm, inverted low amplitude) | `nk.ecg_clean(method="elgendi2010")` | ≤ 6.4e-14 relative |
+| Elgendi peaks before refinement, same signals | `nk.ecg_findpeaks(method="elgendi2010")` / `"elgendi2013"` | 201/201 and 202/202 identical (default config = elgendi2013 peaks as well) |
+| Kubios detection and correction (26 series with injected ectopic/missed/extra/long-short beats, 30–350 beats) | `nk.signal_fixpeaks(method="Kubios")` | 26/26 identical |
+| Kubios with `alpha` 5.2 / 6 and `threshold_floor_s` 0 / 30 / 40 / 50 ms on sub-sample positions (11 synthetic series, 3282 beats) | Python research port of fast-hrv Kubios (`tools/exclusion_reference.py`) | 55/55 identical (flags and corrected positions, bit for bit) |
+| Exclusion mode (single / two-stage, with / without disagreement, 3 parameter sets, same series) | Python research reference (`tools/exclusion_reference.py`) | 132/132 identical (positions, classes, excluded NN) |
+| MeanNN, SDNN, RMSSD, SDSD, Median, MAD, IQR, Min, Max, CVNN, CVSD, HTI, SD1, SD2, SD1/SD2, CSI, CVI, SampEn, ApEn, GI, PI, SD1d/a, C1d/a | `nk.hrv_time` / `hrv_nonlinear` (same R-peaks) | ≤ 3.3e-14 relative |
+| pNN50 / pNN20 | NeuroKit divides by the number of RR intervals, fast-hrv by the number of differences (Task Force) | identical after rescaling |
+| LF, HF, LF/HF, LFnu (records ≥ 5 min) | `nk.hrv_frequency(normalize=False)` | ≤ 24 % observed, test tolerance 30 % (different interpolation and Welch settings) |
+| lnHF | `nk.hrv_frequency` `HRV_LnHF` | ≤ 2.0 % observed (same method difference as HF, on the log scale) |
+| PIP, IALS, PSS, PAS | `nk.hrv_nonlinear` | ≤ 1.4e-16 (identical definitions) |
+| SDRMSSD, Prc20NN, Prc80NN, S, CSI modified | `nk.hrv_time` / `hrv_nonlinear` | ≤ 2.2e-15 |
+| Baevsky stress index | hand-computed (no NeuroKit2 equivalent; Kubios definitions without VLF detrending) | exact |
+| Breathing rate from ECG (2 × 120 s ECGSYN, 15/min) | `nk.ecg_simulate(method="ecgsyn")` respiratory component (`tools/respiration_reference.py`) | 5/6 windows valid, ≤ 0.7/min error; 1 rejected by the AM/FM agreement rule |
+| Lomb–Scargle periodogram (4 series, 120–600 s, with 0–10 % dropped intervals) | `astropy.timeseries.LombScargle(fit_mean=False, normalization="psd")` 8.0.3 (`tools/lomb_reference.py`) | ≤ 1e-9 of the peak |
+| VLF, TINN, DFA α1/α2 | — | not comparable (different definitions; see `tests/neurokit_parity.rs`) |
+
+Regenerate the references with `python tools/neurokit_reference.py` (and `filter_reference.py`,
+`sqi_reference.py`, `exclusion_reference.py`); the parity tests fail if a reference file is missing (`FAST_HRV_SKIP_PARITY=1` skips them).
+
+## Benchmark
+
+`cargo bench --bench throughput` runs a reproducible, dependency-free benchmark on a deterministic
+synthetic 5-minute ECG at 512 Hz (median of 21 runs). Example (Intel i7-9700K, Rust 1.100.0):
+
+| Step | Time |
+|---|---|
+| `ecg_clean` (zero-phase, NeuroKit-compatible) | ~6.5 ms |
+| `EcgStreamFilter`, 32-sample packets, with notch | ~1.0 ms |
+| `find_peaks_default` | ~1.0 ms |
+| `fix_peaks_default` (Kubios) | ~0.2 ms |
+| `hrv()` (all metrics, 360 RR) | ~2.0 ms |
+| `elgendi_peaks` (8–20 Hz filter + detection) | ~1.8 ms |
+| `refine_peaks` (±50 ms, parabolic) | ~0.15 ms |
+| `elgendi_refined_windowed` (10 s windows + 2 × 2 s margin) | ~2.8 ms |
+| `dual_detect` on 30 × 10 s windows (both detectors + bSQI) | ~3.2 ms |
+
+`cargo bench --bench capacity` simulates the planned per-user live pipeline (stream filter, 10 s dual
+detection + SQI, 60 s Kubios + time domain, 5 min full `hrv()`) for 500 interleaved synthetic sessions
+and reports CPU per user, users per core, per-second load spikes and memory; results and method in
+[CAPACITY.md](CAPACITY.md) (Turkish). `-- --stream` runs the detection stage through `StreamDetector`
+(same cost within noise: 50.3 vs 50.5 µs per user per second of signal; memory per session unchanged).
+
+## Features
+
+| Feature | Effect |
+|---|---|
+| `serde` | `Serialize`/`Deserialize` for report structs |
+| `parallel` | reserved, currently no effect |
+| `simd` | portable unrolled helpers (`simd` module); no CPU-specific instructions; off by default |
+| `python` | PyO3 module `fast_hrv` (`maturin develop --release --features python`, then `import fast_hrv`) |
+
+Toolchain: Rust 1.100.0 (`rust-toolchain.toml`), MSRV 1.85, edition 2024.
+
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
+
+Based on `fast_hrv_rs` from [omrylcn/fast_hrv](https://github.com/omrylcn/fast_hrv).
