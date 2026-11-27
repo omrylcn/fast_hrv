@@ -57,7 +57,10 @@ pub fn design_butterworth_bandpass(
 }
 
 /// NeuroKit2's missing-value handling for `ecg_clean`: forward fill, then backward fill.
-fn fill_missing(x: &[f64]) -> Vec<f64> {
+fn fill_missing(x: &[f64]) -> std::borrow::Cow<'_, [f64]> {
+    if x.iter().all(|v| v.is_finite()) {
+        return std::borrow::Cow::Borrowed(x);
+    }
     let mut y = x.to_vec();
     let mut last = f64::NAN;
     for v in y.iter_mut() {
@@ -75,7 +78,7 @@ fn fill_missing(x: &[f64]) -> Vec<f64> {
             *v = next;
         }
     }
-    y
+    std::borrow::Cow::Owned(y)
 }
 
 /// NeuroKit2-compatible cleaning (`nk.ecg_clean(method="neurokit", powerline=powerline_hz)`).

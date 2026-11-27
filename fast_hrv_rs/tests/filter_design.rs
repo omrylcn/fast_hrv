@@ -143,3 +143,35 @@ fn sos_row_roundtrip() {
     let s = SosSection::from_row([2.0, 4.0, 6.0, 2.0, 1.0, 0.5]);
     assert_eq!(s.to_row(), [1.0, 2.0, 3.0, 1.0, 0.5, 0.25]);
 }
+
+/// The moving-average fast path (running sum) of `filtfilt_ba` against the general path: the same
+/// filter written with `a = [n, 0]` goes through the direct form. Long input (the exact sum is
+/// recomputed every 1024 samples), inputs shorter than the window and an offset signal.
+#[test]
+fn moving_average_fast_path_matches_direct_form() {
+    let mut st = 12345u64;
+    let mut rnd = move || {
+        st = st
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (st >> 33) as f64 / (1u64 << 31) as f64 - 0.5
+    };
+    for &len in &[2usize, 3, 7, 9, 10, 11, 31, 1000, 250_000] {
+        let x: Vec<f64> = (0..len)
+            .map(|i| 3000.0 + 800.0 * (i as f64 * 0.013).sin() + 200.0 * rnd())
+            .collect();
+        for taps in [2usize, 5, 10, 12] {
+            let b = vec![1.0; taps];
+            let fast = filtfilt_ba(&b, &[taps as f64], &x);
+            let direct = filtfilt_ba(&b, &[taps as f64, 0.0], &x);
+            assert_eq!(fast.len(), x.len());
+            let scale = direct.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+            let err = fast
+                .iter()
+                .zip(&direct)
+                .fold(0.0f64, |m, (a, b)| m.max((a - b).abs()))
+                / scale;
+            assert!(err < 1e-13, "len {len} taps {taps}: {err:e}");
+        }
+    }
+}
