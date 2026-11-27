@@ -18,7 +18,8 @@ correction and all HRV metrics (time + frequency + nonlinear).
 Per step on the 60 min record: cleaning 1.25×, R peaks 6.8×, Kubios correction 21×, time domain 65×,
 frequency domain 106×, all HRV metrics 177× faster. Same result: R peaks 100 % identical (±2 samples),
 RMSSD / SDNN / SampEn identical (difference < 1e-14); LF/HF differs by 3–8 % (spectral estimation
-details), and fast-hrv does not report LF below 180 s by design.
+details). fast-hrv computes LF only from 120 s of data (technical minimum: about ten cycles of the lowest LF
+frequency) and its metric catalogue (`METRICS`) marks LF and LF/HF reportable from 180 s, 300 s recommended.
 
 Reproduce: `OMP_NUM_THREADS=1 python fast_hrv_rs/tools/neurokit_benchmark.py --minutes 1 5 30 60`
 (needs `neurokit2` and a Rust toolchain). The Python packages (`fast_hrv` NumPy / Numba) were not
@@ -117,7 +118,7 @@ metrics = fast_hrv_rs.hrv_metrics(rr)
 ### Option 4: fast_hrv_rs Native Rust
 
 ```rust
-use fast_hrv_rs::*;
+use fast_hrv::*; // crate `fast-hrv` (fast_hrv_rs/), library name `fast_hrv`
 
 let result = process_ecg(&ecg_signal, 512, true);
 
@@ -190,10 +191,11 @@ from fast_hrv.peaks_numba import ecg_peaks  # Numba version
 
 # HRV metrics
 from fast_hrv.hrv import (
-    get_hrv_features,      # All metrics
-    get_time_domain,       # SDNN, RMSSD, pNN50...
-    get_nonlinear,         # ApEn, SampEn, DFA...
-    get_poincare,          # SD1, SD2, CSI...
+    compute_hrv,               # all metrics from R-peak sample indices: compute_hrv(rpeaks, sampling_rate)
+    compute_time_domain,       # from NN intervals in ms: SDNN, RMSSD, pNN50...
+    compute_poincare,          # SD1, SD2...
+    compute_sampen, compute_apen, compute_dfa,
+    compute_frequency_domain,  # VLF, LF, HF, LF/HF
 )
 ```
 
@@ -221,7 +223,7 @@ fast_hrv_rs.poincare_sd1(rr)
 ### fast_hrv_rs (Native Rust)
 
 ```rust
-use fast_hrv_rs::*;
+use fast_hrv::*; // crate `fast-hrv` (fast_hrv_rs/), library name `fast_hrv`
 
 // ECG processing
 process_ecg(&signal, sampling_rate, correct_artifacts);
@@ -255,9 +257,10 @@ device (e.g. a chest strap or Holter) is a separate validation and not claimed h
 ## Tests
 
 ```bash
-# Python tests
-cd fast_hrv
-pytest tests/
+# Python binding: build the wheel, install it and run the smoke test from outside the repository
+cd fast_hrv_rs
+maturin build --release --out dist && pip install dist/*.whl
+(cd /tmp && python "$OLDPWD/tests/python/smoke.py")
 
 # Rust tests (195 tests, incl. NeuroKit2 parity and streaming = batch)
 cd fast_hrv_rs

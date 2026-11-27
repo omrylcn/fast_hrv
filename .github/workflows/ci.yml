@@ -104,7 +104,8 @@ jobs:
         working-directory: ${{ env.CRATE_DIR }}
 
   python-build:
-    # The Python bindings are not used by the product; only check that they compile.
+    # Build the wheel, install it in a clean virtual environment and import it from outside the
+    # repository (a wheel can build and install yet fail to import if module names disagree).
     runs-on: ubuntu-latest
     env:
       # pyo3 0.22 still emits macro warnings; don't fail this job on them.
@@ -119,3 +120,14 @@ jobs:
           workspaces: ${{ env.CRATE_DIR }}
       - run: cargo build --features python
         working-directory: ${{ env.CRATE_DIR }}
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip "maturin>=1.4,<2.0"
+          maturin build --release --out "$RUNNER_TEMP/dist"
+        working-directory: ${{ env.CRATE_DIR }}
+      - name: Install wheel in a clean venv and run the smoke test from outside the repository
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install numpy "$RUNNER_TEMP"/dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/${{ env.CRATE_DIR }}/tests/python/smoke.py"

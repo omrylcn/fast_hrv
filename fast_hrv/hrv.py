@@ -57,6 +57,13 @@ def compute_hrv(
     dict
         HRV metrics dictionary
     """
+    rpeaks = np.asarray(rpeaks)
+    if rpeaks.ndim != 1 or (len(rpeaks) > 1 and not np.all(np.diff(rpeaks) > 0)):
+        raise ValueError(
+            "compute_hrv expects R-peak sample indices (strictly increasing). "
+            "For NN/RR intervals in ms use compute_time_domain(rri), compute_poincare(rri), "
+            "compute_frequency_domain(rri) ..."
+        )
     # Convert peaks to RR intervals (ms)
     rri = np.diff(rpeaks) / sampling_rate * 1000
 

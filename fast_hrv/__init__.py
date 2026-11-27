@@ -17,8 +17,9 @@ Usage (Numba version - recommended):
     result = process_ecg(ecg_signal, sampling_rate=512)
 
 HRV metrics only:
-    from fast_hrv.hrv import compute_hrv
-    hrv = compute_hrv(rr_intervals)
+    from fast_hrv.hrv import compute_hrv, compute_time_domain
+    hrv = compute_hrv(rpeaks, sampling_rate=512)   # R-peak sample indices
+    td = compute_time_domain(rr_ms)                # NN intervals in milliseconds
 """
 
 __version__ = "0.1.0"

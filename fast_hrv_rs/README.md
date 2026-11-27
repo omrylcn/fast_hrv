@@ -368,7 +368,7 @@ and reports CPU per user, users per core, per-second load spikes and memory; res
 | `serde` | `Serialize`/`Deserialize` for report structs |
 | `parallel` | reserved, currently no effect |
 | `simd` | portable unrolled helpers (`simd` module); no CPU-specific instructions; off by default |
-| `python` | PyO3 module `fast_hrv` (`maturin develop --release --features python`, then `import fast_hrv`) |
+| `python` | PyO3 module `fast_hrv_rs` (`maturin develop --release --features python`, then `import fast_hrv_rs`) |
 
 Toolchain: Rust 1.100.0 (`rust-toolchain.toml`), MSRV 1.85, edition 2024.
 
