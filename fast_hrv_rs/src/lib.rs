@@ -38,6 +38,7 @@ pub mod exclusion;
 pub mod filter;
 pub mod fragmentation;
 pub mod frequency;
+pub mod frequency_nk;
 pub mod gaps;
 pub mod hrv;
 pub mod metrics;
@@ -73,6 +74,7 @@ pub use frequency::{
     FrequencyDomain, FrequencyOptions, frequency_domain, frequency_domain_lomb,
     frequency_domain_with, lomb_scargle, welch,
 };
+pub use frequency_nk::frequency_domain_neurokit;
 pub use gaps::{
     Gap, RrSegment, fix_peaks_segmented, fix_positions_segmented, rri_with_gaps, split_at_gaps,
 };
