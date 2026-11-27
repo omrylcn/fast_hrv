@@ -2,6 +2,26 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.1] - unreleased
+
+### Performance
+- `ecg_clean` (NeuroKit2-compatible, zero-phase) about 2× faster on long records: 60 min at 512 Hz
+  76 → ~35 ms, now faster than NeuroKit2 (SciPy) on every record length measured. Same output: the
+  high-pass is bit-identical; the powerline moving average differs from the direct sum only at rounding
+  level (≤ 1e-13 relative, test `moving_average_fast_path_matches_direct_form`); NeuroKit2 parity tests
+  unchanged.
+  - `sosfiltfilt`: one buffer for both passes, backward pass without reversing, SOS cascades of 2–4
+    sections with coefficients and state in registers (same arithmetic, same order).
+  - `filtfilt_ba` with a moving average (`b` all equal, `a = [a0]`): running window sum, exact sum
+    recomputed every 1024 samples.
+  - `ecg_clean_neurokit`: no copy of the input when it has no missing values.
+- FIR branch of `lfilter_ba`: no per-sample bounds checks (same summation order).
+
+### Added
+- `tools/neurokit_benchmark.py` + `examples/neurokit_bench.rs`: reproducible speed and agreement benchmark
+  against NeuroKit2 (1 / 5 / 30 / 60 min, one thread, peak / RMSSD / SDNN / SampEn / LF/HF agreement).
+- `examples/clean_profile.rs`: timing of the `ecg_clean` parts.
+
 ## [0.9.0] - unreleased
 
 ### Added

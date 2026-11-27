@@ -556,6 +556,10 @@ fn cascade_inplace(sos: &[SosSection], x: &mut [f64], state: &mut [[f64; 2]]) {
     match sos.len() {
         0 => {}
         1 => sos[0].process_inplace(x, &mut state[0]),
+        // fixed sizes keep coefficients and state in registers (same arithmetic, same order)
+        2 => cascade_fixed::<2>(sos, x, state),
+        3 => cascade_fixed::<3>(sos, x, state),
+        4 => cascade_fixed::<4>(sos, x, state),
         _ => {
             for v in x.iter_mut() {
                 let mut xi = *v;
@@ -567,6 +571,46 @@ fn cascade_inplace(sos: &[SosSection], x: &mut [f64], state: &mut [[f64; 2]]) {
                 }
                 *v = xi;
             }
+        }
+    }
+}
+
+fn cascade_fixed<const N: usize>(sos: &[SosSection], x: &mut [f64], state: &mut [[f64; 2]]) {
+    cascade_fixed_iter::<N, _>(sos, x.iter_mut(), state);
+}
+
+fn cascade_fixed_iter<'a, const N: usize, I: Iterator<Item = &'a mut f64>>(
+    sos: &[SosSection],
+    x: I,
+    state: &mut [[f64; 2]],
+) {
+    let c: [SosSection; N] = std::array::from_fn(|i| sos[i]);
+    let mut st: [[f64; 2]; N] = std::array::from_fn(|i| state[i]);
+    for v in x {
+        let mut xi = *v;
+        for k in 0..N {
+            let y = c[k].b0 * xi + st[k][0];
+            st[k][0] = c[k].b1 * xi - c[k].a1 * y + st[k][1];
+            st[k][1] = c[k].b2 * xi - c[k].a2 * y;
+            xi = y;
+        }
+        *v = xi;
+    }
+    state[..N].copy_from_slice(&st);
+}
+
+/// The cascade run from the last sample to the first (the backward pass of a forward-backward filter,
+/// without reversing the buffer).
+fn cascade_inplace_rev(sos: &[SosSection], x: &mut [f64], state: &mut [[f64; 2]]) {
+    match sos.len() {
+        0 => {}
+        2 => cascade_fixed_iter::<2, _>(sos, x.iter_mut().rev(), state),
+        3 => cascade_fixed_iter::<3, _>(sos, x.iter_mut().rev(), state),
+        4 => cascade_fixed_iter::<4, _>(sos, x.iter_mut().rev(), state),
+        _ => {
+            x.reverse();
+            cascade_inplace(sos, x, state);
+            x.reverse();
         }
     }
 }
@@ -621,15 +665,17 @@ pub fn sosfiltfilt(sos: &[SosSection], x: &[f64]) -> Vec<f64> {
         .min(sos.iter().filter(|s| s.a2 == 0.0).count());
     let ntaps = 2 * sos.len() + 1 - first_order;
     let edge = (3 * ntaps).min(n - 1);
-    let ext = odd_ext(x, edge);
     let zi = sosfilt_zi(sos);
     let scaled = |v: f64| -> Vec<[f64; 2]> { zi.iter().map(|z| [z[0] * v, z[1] * v]).collect() };
-    let (mut y, _) = sosfilt(sos, &ext, Some(&scaled(ext[0])));
-    y.reverse();
-    let y0 = y[0];
-    let (mut y, _) = sosfilt(sos, &y, Some(&scaled(y0)));
-    y.reverse();
-    y[edge..edge + n].to_vec()
+    // in place: one buffer for both passes (same arithmetic as two `sosfilt` calls)
+    let mut y = odd_ext(x, edge);
+    let mut st = scaled(y[0]);
+    cascade_inplace(sos, &mut y, &mut st);
+    let mut st = scaled(y[y.len() - 1]);
+    cascade_inplace_rev(sos, &mut y, &mut st);
+    y.truncate(edge + n);
+    y.drain(..edge);
+    y
 }
 
 /// SciPy `lfilter_zi(b, a)` for a general transfer function.
@@ -706,18 +752,43 @@ fn lfilter_ba(b: &[f64], a: &[f64], x: &[f64], zi: &[f64]) -> Vec<f64> {
     let mut z: Vec<f64> = zi.to_vec();
     z.resize(n.saturating_sub(1), 0.0);
     if a.len() == 1 {
-        // FIR: y = conv(b, x)[..len] + zi (what SciPy's lfilter does for len(a) == 1)
-        return x
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let mut acc = 0.0;
-                for (k, &bk) in bn.iter().enumerate().take(i + 1) {
-                    acc += bk * x[i - k];
+        // FIR: y = conv(b, x)[..len] + zi (what SciPy's lfilter does for len(a) == 1);
+        // same summation order (k = 0, 1, ...) as before, without per-sample bounds checks
+        let nb = bn.len();
+        let mut y = Vec::with_capacity(x.len());
+        for i in 0..x.len().min(nb.saturating_sub(1)) {
+            let mut acc = 0.0;
+            for (k, &bk) in bn.iter().enumerate().take(i + 1) {
+                acc += bk * x[i - k];
+            }
+            y.push(acc + z.get(i).copied().unwrap_or(0.0));
+        }
+        if x.len() >= nb {
+            // four outputs at a time: independent sums run in parallel, each in the same order
+            let m = x.len() - nb + 1; // outputs from index nb - 1 on
+            let mut j = 0;
+            while j + 4 <= m {
+                let (mut a0, mut a1, mut a2, mut a3) = (0.0, 0.0, 0.0, 0.0);
+                for (k, &bk) in bn.iter().enumerate() {
+                    let base = j + nb - 1 - k;
+                    let w = &x[base..base + 4];
+                    a0 += bk * w[0];
+                    a1 += bk * w[1];
+                    a2 += bk * w[2];
+                    a3 += bk * w[3];
                 }
-                acc + z.get(i).copied().unwrap_or(0.0)
-            })
-            .collect();
+                y.extend_from_slice(&[a0 + 0.0, a1 + 0.0, a2 + 0.0, a3 + 0.0]);
+                j += 4;
+            }
+            for w in x[j..].windows(nb) {
+                let mut acc = 0.0;
+                for (&bk, &xv) in bn.iter().zip(w.iter().rev()) {
+                    acc += bk * xv;
+                }
+                y.push(acc + 0.0);
+            }
+        }
+        return y;
     }
     let mut y = Vec::with_capacity(x.len());
     for &xi in x {
@@ -739,6 +810,9 @@ pub fn filtfilt_ba(b: &[f64], a: &[f64], x: &[f64]) -> Vec<f64> {
     if n < 2 || b.is_empty() || a.is_empty() || a[0] == 0.0 {
         return x.to_vec();
     }
+    if a.len() == 1 && b.len() > 1 && b.iter().all(|&v| v == b[0]) {
+        return filtfilt_moving_average(b.len(), b[0] / a[0], x);
+    }
     let edge = (3 * b.len().max(a.len())).min(n - 1);
     let ext = odd_ext(x, edge);
     let zi = lfilter_zi_ba(b, a);
@@ -749,6 +823,43 @@ pub fn filtfilt_ba(b: &[f64], a: &[f64], x: &[f64]) -> Vec<f64> {
     let mut y = lfilter_ba(b, a, &y, &scaled(y0));
     y.reverse();
     y[edge..edge + n].to_vec()
+}
+
+/// `filtfilt_ba` for a moving average (all taps `c`, `a = [1]`), as NeuroKit2's powerline filter: the
+/// same odd padding and initial state as SciPy, with a running window sum (exact sum recomputed every
+/// 1024 samples, so the difference to the direct sum stays at rounding level, ~1e-15 relative).
+fn filtfilt_moving_average(taps: usize, c: f64, x: &[f64]) -> Vec<f64> {
+    let n = x.len();
+    let edge = (3 * taps).min(n - 1);
+    let mut y = odd_ext(x, edge);
+    // SciPy lfilter_zi for b = c·ones, a = [1]: zi[k] = c · (taps − 1 − k)
+    let pass = |v: &mut Vec<f64>| {
+        let x0 = v[0];
+        let src = v.clone();
+        let mut sum = 0.0;
+        for i in 0..src.len() {
+            sum += src[i];
+            if i >= taps {
+                sum -= src[i - taps];
+            }
+            if i % 1024 == 0 && i >= taps {
+                sum = src[i + 1 - taps..=i].iter().sum();
+            }
+            // first taps − 1 outputs: partial window + initial state (steady state for x0)
+            v[i] = if i + 1 < taps {
+                c * sum + c * (taps - 1 - i) as f64 * x0
+            } else {
+                c * sum
+            };
+        }
+    };
+    pass(&mut y);
+    y.reverse();
+    pass(&mut y);
+    y.reverse();
+    y.truncate(edge + n);
+    y.drain(..edge);
+    y
 }
 
 // =============================================================================

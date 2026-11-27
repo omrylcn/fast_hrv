@@ -4,23 +4,34 @@ Fast HRV analysis library. R-peak detection, artifact correction, and HRV metric
 
 ## Performance
 
-Benchmark: 512 Hz, 75 BPM synthetic ECG (`neurokit2.ecg_simulate()`)
+Rust crate (`fast_hrv_rs`, v0.9.1) against NeuroKit2 0.3.0 on the same 512 Hz synthetic ECG
+(`nk.ecg_simulate`, 70 bpm), one thread, median of repeated runs. Steps: cleaning, R peaks, Kubios
+correction and all HRV metrics (time + frequency + nonlinear).
 
-| Duration | NeuroKit2 | fast_hrv (NumPy) | fast_hrv (Numba) | Rust | Speedup |
-|----------|-----------|------------------|------------------|------|---------|
-| 30s  | 114 ms | 3 ms  | 2 ms  | 0.5 ms | ~228x |
-| 60s  | 220 ms | 3 ms  | 3 ms  | 2 ms   | ~110x |
-| 180s | 590 ms | 7 ms  | 6 ms  | 3 ms   | ~200x |
-| 360s | 1163 ms | 13 ms | 12 ms | 6.5 ms | ~180x |
+| Record | Beats | NeuroKit2 | fast-hrv (Rust) | Faster |
+|--------|-------|-----------|-----------------|--------|
+| 1 min  | 69    | 32.6 ms   | 0.82 ms         | 40×    |
+| 5 min  | 350   | 406 ms    | 6.1 ms          | 66×    |
+| 30 min | 2100  | 12.8 s    | 95 ms           | 135×   |
+| 60 min | 4201  | 50.9 s    | 356 ms          | 143×   |
+
+Per step on the 60 min record: cleaning 1.25×, R peaks 6.8×, Kubios correction 21×, time domain 65×,
+frequency domain 106×, all HRV metrics 177× faster. Same result: R peaks 100 % identical (±2 samples),
+RMSSD / SDNN / SampEn identical (difference < 1e-14); LF/HF differs by 3–8 % (spectral estimation
+details), and fast-hrv does not report LF below 180 s by design.
+
+Reproduce: `OMP_NUM_THREADS=1 python fast_hrv_rs/tools/neurokit_benchmark.py --minutes 1 5 30 60`
+(needs `neurokit2` and a Rust toolchain). The Python packages (`fast_hrv` NumPy / Numba) were not
+re-measured in this run.
 
 ## Options
 
-| Option | Speed | Note |
-|--------|-------|------|
-| **fast_hrv (NumPy)** | ~90x | Few dependencies |
-| **fast_hrv (Numba)** | ~100x | First call slow (JIT warmup) |
-| **fast_hrv_rs (binding)** | ~180x | Requires Rust compilation |
-| **fast_hrv_rs (native)** | ~180x | Requires Rust knowledge |
+| Option | Note |
+|--------|------|
+| **fast_hrv (NumPy)** | Pure Python, few dependencies |
+| **fast_hrv (Numba)** | First call slow (JIT warm-up) |
+| **fast_hrv_rs (binding)** | Rust core from Python (PyO3), needs a Rust build |
+| **fast_hrv_rs (native)** | Rust crate; streaming, signal quality, full metric set |
 
 ---
 
@@ -118,31 +129,20 @@ println!("RMSSD: {:.2} ms", result.stats.rmssd_ms);
 
 ## Features
 
-### ECG Processing Pipeline
+The Rust crate is the most complete; see [`fast_hrv_rs/README.md`](fast_hrv_rs/README.md) for the full API.
 
-```
-Raw ECG → Clean → Find Peaks → Fix Artifacts → Quality → Stats
-           │           │             │            │         │
-    Butterworth    Gradient     Kubios      Template    HRV
-    Bandpass       Based        Method      Matching    Metrics
-    0.5-40 Hz
-```
-
-### HRV Metrics
-
-| Category | Metrics | Description |
-|----------|---------|-------------|
-| **Time-Domain** | SDNN, RMSSD, pNN50, pNN20, SDSD | Basic HRV measurements |
-| **Nonlinear** | ApEn, SampEn, DFA α1, DFA α2 | Complexity and fractal analysis |
-| **Poincaré** | SD1, SD2, SD1/SD2, CSI, CVI | Geometric analysis |
-| **Asymmetry** | C1d, C1a, SD1d, SD1a, SDNNd, SDNNa | Asymmetry metrics |
-
-### Artifact Correction
-
-Kubios method (Lipponen & Tarvainen 2019):
-- **Ectopic beats**: Early/late beats → interpolation
-- **Missed beats**: Missing beats → add new peak
-- **Extra beats**: Extra beats → deletion
+- **Cleaning:** NeuroKit2-compatible zero-phase cleaning (0.5 Hz high-pass + powerline moving average),
+  a causal streaming filter (0.5–40 Hz, optional adaptive 50/60 Hz notch); live packet-by-packet output is
+  bit-identical to processing the whole record.
+- **R peaks:** NeuroKit2 method, Elgendi (reproduces NeuroKit2's presets), sub-sample refinement, two
+  detectors with their agreement (bSQI), a streaming detector with the same output.
+- **Artifacts:** Kubios correction (Lipponen & Tarvainen 2019, NeuroKit2-equivalent output) or an exclusion
+  mode that removes ectopic / suspect beats without moving any.
+- **Signal quality:** flat line, saturation, kSQI, pSQI, basSQI, bSQI, template correlation, RR plausibility.
+- **HRV metrics:** time domain (incl. lnRMSSD, Baevsky stress index), frequency domain (FFT and
+  Lomb–Scargle), nonlinear (SampEn, ApEn, DFA, Poincaré, CSI/CVI), asymmetry, fragmentation; a minimum
+  window rule for every metric.
+- **Breathing rate from ECG** (R amplitude + RR modulation).
 
 ---
 
@@ -242,101 +242,11 @@ compute_poincare(&rr);
 
 ## Accuracy
 
-Comparison with NeuroKit2 (360s synthetic ECG):
-
-| Metric | NeuroKit2 | Rust | Diff |
-|--------|-----------|------|------|
-| N Peaks | 450 | 450 | 0 |
-| SDNN | 10.94 ms | 10.95 ms | 0.01% |
-| RMSSD | 11.04 ms | 11.04 ms | 0.03% |
-| pNN50 | 0.00% | 0.00% | 0 |
-
----
-
-## Technical Details
-
-### Peak Detection Algorithm
-
-NeuroKit2 method:
-```
-1. Compute gradient (central differences)
-2. Square the gradient
-3. Moving average (window = 0.2s)
-4. Find local maxima
-5. Minimum distance filter (0.3s)
-```
-
-### Why Is It So Fast?
-
-**NeuroKit2 Slowness Reasons:**
-- Pure Python loops
-- DataFrame overhead (pandas)
-- General-purpose design
-
-**fast_hrv Optimizations:**
-- Numba JIT compilation
-- NumPy vectorized operations
-- Minimum allocation
-- HRV-specific design
-
-**Rust Optimizations:**
-- Zero-cost abstractions
-- SIMD auto-vectorization
-- Stack allocation
-- No GIL, no GC
-
-### SIMD Performance
-
-```rust
-// Standard: 88 µs
-for i in 0..n { sum += data[i]; }
-
-// SIMD (4-wide): 33 µs (2.7x faster)
-for i in (0..n).step_by(4) {
-    sum0 += data[i];
-    sum1 += data[i+1];
-    sum2 += data[i+2];
-    sum3 += data[i+3];
-}
-```
-
-### Rust vs Numba
-
-360s ECG benchmark:
-- **Numba**: 12 ms
-- **Rust Binding**: 6.5 ms (~1.8x)
-
-| Factor | Numba | Rust | Impact |
-|--------|-------|------|--------|
-| **JIT Overhead** | Type dispatch on each call | Compile-time, zero overhead | ~10-15% |
-| **Memory Management** | Python GC, heap allocation | Stack allocation, no GC | ~15-20% |
-| **Function Calls** | Python → Numba context switch | Native, can be inlined | ~10-15% |
-| **LLVM Optimization** | Dynamic, limited | Full LTO, aggressive inlining | ~20-30% |
-| **Type Checking** | Runtime type guards | Compile-time, zero cost | ~5-10% |
-
-**Pipeline Comparison:**
-
-```
-Numba Pipeline:
-Python → NumPy Array → Numba JIT → LLVM IR → Native Code → Python
-         ↑                                              ↓
-         └──────────── GIL + GC overhead ──────────────┘
-
-Rust Binding Pipeline:
-Python → NumPy Array → Rust (zero-copy) → Native Code → NumPy Array
-                      ↑                              ↓
-                      └──── No GIL, No GC, Pre-compiled ────┘
-```
-
-**Critical Differences:**
-
-1. **Pre-compiled vs JIT**: Rust code is pre-compiled with `maturin develop --release`, Numba does type dispatch on each call
-
-2. **Zero-copy FFI**: PyO3 + numpy crate passes NumPy arrays directly to Rust without copying
-
-3. **LTO (Link Time Optimization)**: Rust can inline across all modules, Numba optimizes on a per-function basis
-
-4. **Stack vs Heap**: Rust keeps small buffers on the stack, Python/Numba allocates everything on the heap
+Against NeuroKit2 0.3.0 on 1, 5, 30 and 60 min synthetic records (benchmark above): R peaks identical
+(±2 samples) in all records; RMSSD, SDNN and SampEn identical to < 1e-14 relative; LF/HF 3–8 % apart.
+The Rust test suite checks NeuroKit2 parity on fixtures (`fast_hrv_rs/tests/neurokit_parity.rs`).
+Agreement with NeuroKit2 shows the methods are implemented as specified; accuracy against a reference
+device (e.g. a chest strap or Holter) is a separate validation and not claimed here.
 
 ---
 
@@ -347,13 +257,12 @@ Python → NumPy Array → Rust (zero-copy) → Native Code → NumPy Array
 cd fast_hrv
 pytest tests/
 
-# Rust tests (37 tests)
+# Rust tests (195 tests, incl. NeuroKit2 parity and streaming = batch)
 cd fast_hrv_rs
-cargo test
+cargo test --release
 
-# Benchmark
-cargo run --release --bin ecg_breakdown
-cargo run --release --features simd --bin simd_bench
+# Speed and agreement against NeuroKit2
+OMP_NUM_THREADS=1 python tools/neurokit_benchmark.py --minutes 1 5 30 60
 ```
 
 ---
@@ -372,7 +281,8 @@ cargo run --release --features simd --bin simd_bench
 
 ## Roadmap
 
-- [ ] Frequency-domain HRV (LF, HF, LF/HF ratio)
-- [ ] GPU acceleration (CUDA/OpenCL)
-- [ ] Streaming/real-time mode
-- [ ] Pre-built wheels (manylinux, macOS, Windows)
+- [x] Frequency-domain HRV (LF, HF, LF/HF; FFT and Lomb–Scargle)
+- [x] Streaming / real-time mode (bit-identical to batch)
+- [ ] Explain or remove the 3–8 % LF/HF difference to NeuroKit2
+- [ ] Validation against a reference device
+- [ ] Published packages (crates.io, PyPI) and pre-built wheels (manylinux, macOS, Windows)
