@@ -35,7 +35,8 @@ fn to_indices(a: &PyReadonlyArray1<'_, i64>) -> PyResult<Vec<usize>> {
 // ECG Processing
 // =============================================================================
 
-/// Clean ECG signal using Butterworth bandpass filter
+/// Clean ECG signal as NeuroKit2 `ecg_clean(method="neurokit")`: 0.5 Hz high-pass (order 5,
+/// zero-phase) and a 50 Hz powerline moving average.
 #[pyfunction]
 #[pyo3(name = "ecg_clean")]
 fn py_ecg_clean<'py>(
@@ -107,7 +108,7 @@ fn py_compute_quality<'py>(
 
 /// Full ECG processing pipeline
 #[pyfunction]
-#[pyo3(name = "process_ecg")]
+#[pyo3(name = "process_ecg", signature = (signal, sampling_rate, correct_artifacts = true))]
 fn py_process_ecg<'py>(
     py: Python<'py>,
     signal: PyReadonlyArray1<'py, f64>,
@@ -279,9 +280,13 @@ fn py_hrv_metrics(py: Python<'_>, rr: PyReadonlyArray1<f64>) -> PyResult<PyObjec
 // Module Definition
 // =============================================================================
 
-/// fast_hrv - Fast HRV analysis in Rust (`import fast_hrv`)
+/// fast_hrv_rs - Fast HRV analysis in Rust (`import fast_hrv_rs`)
+/// Python module `fast_hrv_rs` (the pure-Python package of this repository is `fast_hrv`; the
+/// binding keeps its own name so both can be installed together). Must match `module-name` in
+/// `pyproject.toml`, otherwise the wheel installs but `import` fails (`PyInit_*` not found).
 #[pymodule]
-fn fast_hrv(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn fast_hrv_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     // ECG functions
     m.add_function(wrap_pyfunction!(py_ecg_clean, m)?)?;
     m.add_function(wrap_pyfunction!(py_find_peaks, m)?)?;

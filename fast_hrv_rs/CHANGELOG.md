@@ -2,6 +2,25 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.3] - unreleased
+
+### Fixed (Python packaging and getting started; found by an independent review)
+- Python binding: the PyO3 module was named `fast_hrv` while the wheel is built as `fast_hrv_rs`, so the
+  wheel installed but `import fast_hrv_rs` failed (`PyInit_fast_hrv_rs` missing). The module is now
+  `fast_hrv_rs` (no clash with the pure-Python package `fast_hrv`), exposes `__version__`, and the wheel
+  version follows the crate version (was a fixed 0.1.0).
+- `process_ecg(signal, sampling_rate, correct_artifacts=True)`: `correct_artifacts` now has a default;
+  `ecg_clean` docstring describes the NeuroKit2 cleaning it performs.
+- Pure-Python `fast_hrv.hrv.compute_hrv` rejects input that is not R-peak sample indices (it silently took
+  RR intervals and returned a wrong mean RR); the package docstring example is corrected.
+- READMEs: the Python HRV imports, the Rust `use` path (`fast_hrv`), the test instructions and the LF
+  minimum (computed from 120 s, reportable from 180 s per `METRICS`) now match the code.
+
+### Added
+- CI builds the wheel, installs it in a clean virtual environment and runs `tests/python/smoke.py` from
+  outside the repository (import, HRV from NN intervals, ECG pipeline, version).
+- `examples/readme_quickstart.rs`: the README's Rust quick start, compiled in CI.
+
 ## [0.9.2] - unreleased
 
 ### Added
