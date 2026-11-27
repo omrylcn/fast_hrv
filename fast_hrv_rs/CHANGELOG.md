@@ -2,6 +2,20 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.2] - unreleased
+
+### Added
+- `frequency_domain_neurokit`: frequency-domain metrics computed the way `nk.hrv_frequency` does with its
+  defaults (100 Hz quadratic spline as `interp1d(kind="quadratic")`, mean removed, Welch with Hann windows
+  of half the series and FFT length 2·nperseg, in-band trapezoid). LF/HF matches NeuroKit2 to ≤ 3e-13
+  relative on simulated ECG (2, 5 and 30 min; test `neurokit_frequency_parity`). Band powers stay in ms²
+  (NeuroKit2 divides its PSD by the maximum) and no minimum durations are applied, as in NeuroKit2.
+- The default `frequency_domain` is unchanged (Task Force / Kubios practice: 4 Hz cubic spline, 64 s Welch
+  segments, exact band integration). The two differ mainly through the window length; on the same
+  record LF/HF can differ by several percent (up to ~25 % on short records), which is why LF/HF should be
+  compared only within one method.
+- DFT of any length (Bluestein) and the SciPy-equivalent quadratic interpolating spline (internal).
+
 ## [0.9.1] - unreleased
 
 ### Performance

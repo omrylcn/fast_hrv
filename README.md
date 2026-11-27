@@ -243,7 +243,9 @@ compute_poincare(&rr);
 ## Accuracy
 
 Against NeuroKit2 0.3.0 on 1, 5, 30 and 60 min synthetic records (benchmark above): R peaks identical
-(±2 samples) in all records; RMSSD, SDNN and SampEn identical to < 1e-14 relative; LF/HF 3–8 % apart.
+(±2 samples) in all records; RMSSD, SDNN and SampEn identical to < 1e-14 relative. LF/HF: the default (Task Force / Kubios practice,
+4 Hz cubic spline, 64 s Welch segments) differs from NeuroKit2 by a few percent because of the window length;
+`frequency_domain_neurokit` reproduces `nk.hrv_frequency` (LF/HF ≤ 3e-13 relative).
 The Rust test suite checks NeuroKit2 parity on fixtures (`fast_hrv_rs/tests/neurokit_parity.rs`).
 Agreement with NeuroKit2 shows the methods are implemented as specified; accuracy against a reference
 device (e.g. a chest strap or Holter) is a separate validation and not claimed here.
@@ -283,6 +285,6 @@ OMP_NUM_THREADS=1 python tools/neurokit_benchmark.py --minutes 1 5 30 60
 
 - [x] Frequency-domain HRV (LF, HF, LF/HF; FFT and Lomb–Scargle)
 - [x] Streaming / real-time mode (bit-identical to batch)
-- [ ] Explain or remove the 3–8 % LF/HF difference to NeuroKit2
+- [x] LF/HF difference to NeuroKit2 explained (window length, interpolation, band integration); `frequency_domain_neurokit` reproduces NeuroKit2 (≤ 3e-13)
 - [ ] Validation against a reference device
 - [ ] Published packages (crates.io, PyPI) and pre-built wheels (manylinux, macOS, Windows)

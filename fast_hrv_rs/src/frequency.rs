@@ -41,6 +41,10 @@ pub struct FrequencyDomain {
 }
 
 impl FrequencyDomain {
+    pub(crate) fn nan_pub() -> Self {
+        Self::nan()
+    }
+
     fn nan() -> Self {
         let n = f64::NAN;
         Self {
@@ -104,6 +108,10 @@ pub fn cubic_spline(x: &[f64], y: &[f64], xs: &[f64]) -> Vec<f64> {
 }
 
 /// Yerinde, özyinelemesiz radix-2 FFT. `re.len()` 2'nin kuvveti olmalı.
+pub(crate) fn fft_pow2(re: &mut [f64], im: &mut [f64]) {
+    fft(re, im)
+}
+
 fn fft(re: &mut [f64], im: &mut [f64]) {
     let n = re.len();
     let mut j = 0;
@@ -290,6 +298,16 @@ pub fn frequency_domain_with(rri: &[f64], opts: &FrequencyOptions) -> FrequencyD
     let lf = band(LF, opts.min_duration_lf_s);
     let hf = band(HF, opts.min_duration_hf_s);
     bands_to_domain(&freqs, &psd, vlf, lf, hf)
+}
+
+pub(crate) fn bands_to_domain_pub(
+    freqs: &[f64],
+    psd: &[f64],
+    vlf: f64,
+    lf: f64,
+    hf: f64,
+) -> FrequencyDomain {
+    bands_to_domain(freqs, psd, vlf, lf, hf)
 }
 
 /// Builds the result from the band powers (shared by Welch and Lomb–Scargle).

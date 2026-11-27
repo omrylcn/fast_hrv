@@ -263,7 +263,7 @@ let accept = w.artifact_ratio() <= 0.02 && w.kept_nn >= 40 && w.kept_share() >= 
 | Group | Metrics |
 |---|---|
 | Time domain | MeanNN, SDNN, RMSSD, lnRMSSD, SDSD, SDRMSSD, pNN50, pNN20, MedianNN, MadNN, IQRNN, Prc20NN, Prc80NN, MinNN, MaxNN, CVNN, CVSD, MeanHR, SDHR, HTI, TINN, Baevsky stress index (and √SI) |
-| Frequency domain: Welch on 4 Hz cubic-spline resampling (`frequency_domain`), or Lomb–Scargle on the uneven beat times (`frequency_domain_lomb`) | VLF, LF, HF, lnHF, total power, LF/HF, LFnu, HFnu, LF peak, HF peak |
+| Frequency domain: Welch on 4 Hz cubic-spline resampling (`frequency_domain`), Lomb–Scargle on the uneven beat times (`frequency_domain_lomb`), or NeuroKit2-compatible (`frequency_domain_neurokit`) | VLF, LF, HF, lnHF, total power, LF/HF, LFnu, HFnu, LF peak, HF peak |
 | Nonlinear | SD1, SD2, SD1/SD2, S (ellipse area), CSI, CSI modified, CVI, SampEn, ApEn, DFA α1, DFA α2 |
 | Asymmetry | GI, PI, SD1d, SD1a, C1d, C1a |
 | Fragmentation (Costa 2017, NeuroKit2 definitions) | PIP, IALS, PSS, PAS |
@@ -273,6 +273,14 @@ valid intervals at their beat times (e.g. after the exclusion mode, or with shor
 filled in. Classical periodogram, density scaled so that a sine of amplitude A gives A²/2 (as Welch);
 grid step 1 / (5 · T) up to 0.5 Hz; same bands, minimum durations and outputs as Welch. The two estimators
 agree within ~15 % on gap-free series; compare values only within one method. About 0.7 ms per 5 min window.
+
+**NeuroKit2-compatible frequency domain** (`frequency_domain_neurokit(rri)`) reproduces `nk.hrv_frequency`
+with its defaults: 100 Hz quadratic spline, Welch with Hann windows of half the series (FFT length
+2·nperseg), in-band trapezoid. LF/HF equals NeuroKit2's to ≤ 3e-13 relative (test on simulated ECG, 2–30
+min). Band powers stay in ms² (NeuroKit2 normalises its PSD to the maximum, so only its ratios compare) and
+no minimum durations apply. The default `frequency_domain` (Task Force / Kubios practice: 4 Hz cubic spline,
+64 s segments) and this mode differ mainly through the window length: LF/HF moves by a few percent on long
+records and up to ~25 % on short ones. Pick one method and compare LF/HF only within it.
 
 **Breathing rate (ECG-derived respiration):** `r_amplitudes(&clean, &peaks, fs)` and
 `respiratory_rate(&beat_times_s, &rr_ms, &r_amp, &RespirationConfig::default())` estimate breaths/min in a
