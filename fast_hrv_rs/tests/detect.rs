@@ -659,3 +659,89 @@ fn windowed_generic_detector_and_validation() {
             .is_empty()
     );
 }
+
+/// `RefineConfig::smoothing_hz`: on beats whose dominant deflection is a broad trough with two
+/// nearly equal minima (as in a bundle branch block), the unsmoothed search jumps between the two
+/// minima from beat to beat; the smoothed search picks one point. A narrow R peak does not move.
+#[test]
+fn refine_smoothing_stabilises_a_double_bottomed_trough() {
+    let fs = 360.0;
+    let n = (60.0 * fs) as usize;
+    let mut x = vec![0.0f64; n];
+    let mut st = 7u64;
+    let mut rnd = move || {
+        st = st
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (st >> 33) as f64 / (1u64 << 31) as f64 - 0.5
+    };
+    let g = |t: f64, c: f64, w: f64| (-((t - c) / w).powi(2)).exp();
+    let mut beats = Vec::new();
+    let mut b = 0.5;
+    while b + 0.3 < 60.0 {
+        beats.push(b);
+        // small R, then a broad negative wave with two minima whose depths alternate slightly
+        let tilt = 0.06 * rnd();
+        let i0 = ((b - 0.1) * fs) as usize;
+        for (i, v) in x
+            .iter_mut()
+            .enumerate()
+            .take(((b + 0.2) * fs) as usize)
+            .skip(i0)
+        {
+            let t = i as f64 / fs;
+            *v += 0.8 * g(t, b, 0.008)
+                - (1.0 + tilt) * g(t, b + 0.030, 0.010)
+                - (1.0 - tilt) * g(t, b + 0.046, 0.010);
+        }
+        b += 0.8;
+    }
+    let cands: Vec<usize> = beats.iter().map(|&b| ((b + 0.03) * fs) as usize).collect();
+    let spread = |cfg: &RefineConfig| {
+        let r = refine_peaks(&x, fs, &cands, cfg).unwrap();
+        let off: Vec<f64> = r
+            .positions
+            .iter()
+            .zip(&beats)
+            .map(|(p, b)| p / fs - b)
+            .collect();
+        let jumps: Vec<f64> = off.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+        jumps.iter().cloned().fold(0.0, f64::max)
+    };
+    let neg = RefineConfig {
+        polarity: Polarity::Negative,
+        ..RefineConfig::default()
+    };
+    let raw = spread(&neg);
+    let smooth = spread(&RefineConfig {
+        smoothing_hz: Some(15.0),
+        ..neg
+    });
+    assert!(raw > 0.010, "unsmoothed jumps between the minima: {raw}");
+    assert!(smooth < 0.003, "smoothed stays on one point: {smooth}");
+    // a narrow upright R next to the large trough moves by a few ms, by the same amount every beat
+    let pos = RefineConfig {
+        polarity: Polarity::Positive,
+        smoothing_hz: Some(15.0),
+        ..RefineConfig::default()
+    };
+    let at: Vec<usize> = beats.iter().map(|&b| (b * fs) as usize).collect();
+    let r = refine_peaks(&x, fs, &at, &pos).unwrap();
+    let off: Vec<f64> = r
+        .positions
+        .iter()
+        .zip(&beats)
+        .map(|(p, b)| p / fs - b)
+        .collect();
+    let (lo, hi) = off
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    assert!(lo > -0.008 && hi < 0.002, "shift {lo}..{hi}");
+    assert!(hi - lo < 0.001, "shift differs between beats: {lo}..{hi}");
+    // invalid cut-off
+    let bad = RefineConfig {
+        smoothing_hz: Some(fs),
+        ..RefineConfig::default()
+    };
+    assert!(refine_peaks(&x, fs, &cands, &bad).is_err());
+}
