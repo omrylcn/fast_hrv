@@ -2,6 +2,25 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.4] - unreleased
+
+### Added
+- `RefineConfig::smoothing_hz` (default `None`): search the R-peak extremum in a zero-phase low-pass
+  (Butterworth order 2) of the signal. Wide or notched QRS complexes (bundle branch blocks; e.g. the
+  double-bottomed S wave of MIT-BIH 118) otherwise make the chosen point jump between two nearly equal
+  extremes from beat to beat, which adds jitter to RR intervals. With 15 Hz on 18 MIT-BIH records the
+  median RMSSD error fell from 0.54 % to 0.31 % (118: +1.12 % → −0.15 %, 111: +31 % → +10 %,
+  109: +145 % → +71 %), but some noisy records got worse (108: +10 % → +25 %), so it is opt-in.
+- `tools/mitdb_timing.py` + `examples/peak_timing.rs`: reproducible timing benchmark of the live detector
+  on MIT-BIH (F1 at ±50 and ±150 ms, median offset, beat-to-beat jitter of the fiducial, RMSSD error over
+  consecutive conducted beats). The live path adds a constant ~11–14 ms (causal filter delay), which
+  cancels in RR intervals; jitter is what reaches HRV.
+
+### Known limitation
+- On wide QRS complexes (left bundle branch block) the fiducial point remains unstable (MIT-BIH 109:
+  RMSSD +71 % even with smoothing). Template alignment of each beat to a running average beat is the
+  planned fix.
+
 ## [0.9.3] - unreleased
 
 ### Fixed (Python packaging and getting started; found by an independent review)

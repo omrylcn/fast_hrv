@@ -413,6 +413,16 @@ pub struct RefineConfig {
     pub polarity: Polarity,
     /// 3-point parabolic interpolation around the extremum (sub-sample position). Default `true`.
     pub interpolate: bool,
+    /// Search the extremum in a zero-phase low-pass (Butterworth order 2, this cut-off in Hz) of
+    /// `signal` instead of `signal` itself; `None` searches the signal as given. Smoothing merges
+    /// the small notches of a wide QRS (e.g. the double-bottomed S wave of a bundle branch block)
+    /// so that the same point is chosen in every beat. The point itself can move by a few ms (e.g. a
+    /// narrow R next to a large S moves ~4 ms earlier), by the same amount in every beat of that
+    /// shape, so RR intervals are not affected. Zero-phase, so no delay is added; deterministic per
+    /// call, so windowed and streaming detection stay identical. Default `None`: on MIT-BIH (18
+    /// records) 15 Hz lowered the median RMSSD error from 0.54 % to 0.31 % and helped most on wide
+    /// QRS (bundle branch blocks), but was worse on some noisy records; see `tools/mitdb_timing.py`.
+    pub smoothing_hz: Option<f64>,
 }
 
 impl Default for RefineConfig {
@@ -421,6 +431,7 @@ impl Default for RefineConfig {
             half_window_s: 0.05,
             polarity: Polarity::Auto,
             interpolate: true,
+            smoothing_hz: None,
         }
     }
 }
@@ -517,6 +528,18 @@ pub fn refine_peaks(
         return Err(HrvError::InvalidParameter("half_window_s"));
     }
     check_finite(signal)?;
+    let smoothed;
+    let signal = match cfg.smoothing_hz {
+        Some(fc) if signal.len() > 12 => {
+            if !(fc.is_finite() && fc > 0.0 && fc < fs / 2.0) {
+                return Err(HrvError::InvalidParameter("smoothing_hz"));
+            }
+            let sos = butter_sos(2, &[fc], BandType::Lowpass, fs)?;
+            smoothed = sosfiltfilt(&sos, signal);
+            &smoothed[..]
+        }
+        _ => signal,
+    };
     let n = signal.len();
     let mut cands: Vec<usize> = candidates.iter().copied().filter(|&c| c < n).collect();
     cands.sort_unstable();
