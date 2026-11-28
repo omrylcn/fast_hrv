@@ -44,11 +44,13 @@ pub mod gaps;
 pub mod hrv;
 pub mod metrics;
 pub mod peaks;
+pub mod presets;
 pub mod report;
 pub mod respiration;
 pub mod sqi;
 pub mod stream;
 pub mod time_domain;
+pub mod window_report;
 
 #[cfg(feature = "simd")]
 pub mod simd;
@@ -87,6 +89,7 @@ pub use peaks::{
     KubiosPositions, detect_artifacts, ecg_peaks, find_peaks, find_peaks_default, fix_peaks,
     fix_peaks_default, fix_peaks_with, fix_positions_with,
 };
+pub use presets::{Preset, Provenance, hrv_with_preset};
 pub use report::{
     Asymmetry, HrvReport, NonLinear, hrv, rri_from_peaks, rri_from_positions, rri_from_times,
     try_rri_from_peaks, try_rri_from_times,
@@ -101,4 +104,7 @@ pub use stream::{
 };
 pub use time_domain::{
     MaskedTimeDomain, TimeDomain, masked_differences, rmssd_masked, time_domain, time_domain_masked,
+};
+pub use window_report::{
+    MetricVerdict, Verdict, WindowContext, WindowReport, window_report, window_report_rri,
 };

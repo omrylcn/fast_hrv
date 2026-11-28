@@ -2,6 +2,25 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.6] - unreleased
+
+### Added
+- `window_report(&HrvReport, &WindowContext)` / `window_report_rri(rri, corrected, breathing)`: a
+  verdict per metric (valid / warning / suppressed) with reason codes, from the window length
+  (`min_s`, `strict_min_s()`), the share and runs of corrected or excluded beats
+  (`max_artifact_ratio()`), and the breathing rate (LF/HF, LFnu, HFnu suppressed when breathing is in
+  the LF band; HF warned outside 9–24 /min). Computed values stay separate from what may be shown
+  (`WindowReport::shown`).
+- `HrvReport::value(name)`: every metric of `METRICS` by name.
+- Presets and provenance: `Preset::{TaskForce, KubiosLike, NeuroKit}`, `hrv_with_preset(rri, preset)`
+  returns the report and a `Provenance` record (library, version, preset, detrending λ, frequency
+  method, intervals, duration; serialisable with `serde`). Kubios-like = smoothness priors λ = 500 +
+  Welch 300 s (published defaults; λ not checked against a Kubios export).
+- `FrequencyOptions::welch_segment_s` (default 64 s, unchanged behaviour).
+
+### Changed (breaking for struct literals)
+- New field `FrequencyOptions::welch_segment_s` (use `..FrequencyOptions::default()`).
+
 ## [0.9.5] - unreleased
 
 ### Added
