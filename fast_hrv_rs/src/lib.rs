@@ -32,6 +32,7 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod detect;
+pub mod detrend;
 pub mod ecg;
 pub mod error;
 pub mod exclusion;
@@ -60,6 +61,7 @@ pub use detect::{
     WindowConfig, WindowedDual, detect_windowed, dual_detect, dual_detect_windowed, elgendi_peaks,
     elgendi_refined_windowed, refine_peaks,
 };
+pub use detrend::{smoothness_priors, smoothness_priors_cutoff_hz, smoothness_priors_trend};
 pub use ecg::{
     EcgFilterConfig, EcgResult, EcgStats, EcgStreamFilter, compute_quality, compute_stats,
     ecg_clean, ecg_clean_causal, ecg_clean_neurokit, ecg_clean_zero_phase, process_ecg,

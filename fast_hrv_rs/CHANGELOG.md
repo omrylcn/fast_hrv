@@ -2,6 +2,22 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.5] - unreleased
+
+### Added
+- `smoothness_priors(x, λ)` / `smoothness_priors_trend` / `smoothness_priors_cutoff_hz` (Tarvainen et
+  al. 2002): the detrending Kubios applies to the RR series before frequency and nonlinear analysis.
+  Banded LDLᵀ solve, O(N). Equal to NeuroKit2 `signal_detrend(method="tarvainen2002")` to ≤ 7e-10
+  relative (test `tarvainen2002_matches_neurokit`, λ = 10 and 500). The cut-off helper gives the −3 dB
+  point of the high-pass (λ = 500 on a 4 Hz series: 0.035 Hz).
+- `MetricInfo::strict_min_s()`: shortest length with validated agreement against 5 min under strict
+  criteria (Shaffer, Meehan & Zerr 2020; e.g. RMSSD 60 s, LF 90 s, HF and LF/HF 180 s), never below
+  `min_s`. `MetricInfo::max_artifact_ratio()`: largest share of corrected or excluded beats for which a
+  metric is reported (5 % by default, Kubios convention; DFA α1 3 %, Rogers & Gronwald 2022).
+
+### Changed
+- `METRICS`: DFA α2 `min_s` 300 → 1200 s (scales of 16–64 beats need ≥ 20 min).
+
 ## [0.9.4] - unreleased
 
 ### Added

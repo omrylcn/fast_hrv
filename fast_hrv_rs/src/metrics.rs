@@ -214,9 +214,9 @@ pub const METRICS: &[MetricInfo] = &[
         "dfa_alpha2",
         "nonlinear",
         "",
-        300.0,
         1200.0,
-        "convention (scales 16–64 beats)",
+        1200.0,
+        "Shaffer 2020 (≥ 180 s for agreement); scales 16–64 beats need ≥ 20 min (Quigley 2024)",
     ),
     m("gi", "asymmetry", "%", 120.0, 300.0, "convention"),
     m("pi", "asymmetry", "%", 120.0, 300.0, "convention"),
@@ -242,6 +242,66 @@ pub fn metric_info(name: &str) -> Option<&'static MetricInfo> {
     METRICS.iter().find(|m| m.name == name)
 }
 
+/// Shortest length with validated agreement against 5 min under strict criteria (Shaffer, Meehan &
+/// Zerr 2020: r ≥ 0.90, limits of agreement within ±5 % of the 5 min range, no significant bias).
+/// Metrics not in the study use their `min_s`.
+const STRICT_MIN_S: &[(&str, f64)] = &[
+    ("rmssd", 60.0),
+    ("ln_rmssd", 60.0),
+    ("sdsd", 60.0),
+    ("cvsd", 60.0),
+    ("sd1", 60.0),
+    ("sdnn", 60.0),
+    ("cvnn", 60.0),
+    ("pnn50", 60.0),
+    ("pnn20", 60.0),
+    ("sd2", 90.0),
+    ("sd1_sd2", 90.0),
+    ("csi", 90.0),
+    ("cvi", 90.0),
+    ("csi_modified", 90.0),
+    ("s", 90.0),
+    ("tinn", 90.0),
+    ("lf", 90.0),
+    ("lf_peak", 90.0),
+    ("hti", 120.0),
+    ("dfa_alpha1", 120.0),
+    ("hf", 180.0),
+    ("lnhf", 180.0),
+    ("hf_peak", 180.0),
+    ("lf_hf", 180.0),
+    ("lfnu", 180.0),
+    ("hfnu", 180.0),
+    ("sampen", 180.0),
+    ("apen", 180.0),
+    ("dfa_alpha2", 180.0),
+];
+
+/// Largest share of corrected or excluded beats (artifacts and ectopic beats) in the window for
+/// which the metric is still reported. Default 5 % (Kubios user guide convention; Quigley 2024
+/// limits recordings with more than ~1 % abnormal beats to global measures). DFA α1: 3 % (Rogers &
+/// Gronwald 2022: larger shares bias α1 even after correction).
+const MAX_ARTIFACT_RATIO: &[(&str, f64)] = &[("dfa_alpha1", 0.03)];
+
+impl MetricInfo {
+    /// Strict minimum length (s): shortest length with validated agreement against 5 min under strict
+    /// criteria (Shaffer, Meehan & Zerr 2020), never below `min_s`.
+    pub fn strict_min_s(&self) -> f64 {
+        STRICT_MIN_S
+            .iter()
+            .find(|(n, _)| *n == self.name)
+            .map_or(self.min_s, |(_, v)| v.max(self.min_s))
+    }
+
+    /// Largest share of corrected or excluded beats for which the metric is reported (0..1).
+    pub fn max_artifact_ratio(&self) -> f64 {
+        MAX_ARTIFACT_RATIO
+            .iter()
+            .find(|(n, _)| *n == self.name)
+            .map_or(0.05, |(_, v)| *v)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +317,19 @@ mod tests {
         }
         assert_eq!(metric_info("lf_hf").unwrap().min_s, 180.0);
         assert!(metric_info("nope").is_none());
+        for (n, _) in STRICT_MIN_S.iter().chain(MAX_ARTIFACT_RATIO) {
+            assert!(metric_info(n).is_some(), "unknown metric {n}");
+        }
+        for m in METRICS {
+            assert!(m.strict_min_s() >= m.min_s);
+            assert!((0.0..=1.0).contains(&m.max_artifact_ratio()));
+        }
+        assert_eq!(metric_info("hf").unwrap().strict_min_s(), 180.0);
+        assert_eq!(metric_info("rmssd").unwrap().strict_min_s(), 60.0);
+        assert_eq!(metric_info("dfa_alpha2").unwrap().min_s, 1200.0);
+        assert_eq!(
+            metric_info("dfa_alpha1").unwrap().max_artifact_ratio(),
+            0.03
+        );
     }
 }
