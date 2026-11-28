@@ -2,6 +2,33 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.6] - unreleased
+
+### Added
+- `window_report(&HrvReport, &WindowContext)` / `window_report_rri(rri, corrected, breathing)`: a
+  verdict per metric (valid / warning / suppressed) with reason codes, from the window length
+  (`min_s`, `strict_min_s()`), the share and runs of corrected or excluded beats
+  (`max_artifact_ratio()`), and the breathing rate (LF/HF, LFnu, HFnu suppressed when breathing is in
+  the LF band; HF warned outside 9–24 /min). Computed values stay separate from what may be shown
+  (`WindowReport::shown`).
+- `HrvReport::value(name)`: every metric of `METRICS` by name.
+- Presets and provenance: `Preset::{TaskForce, KubiosLike, NeuroKit}`, `hrv_with_preset(rri, preset)`
+  returns the report and a `Provenance` record (library, version, preset, detrending λ, frequency
+  method, intervals, duration; serialisable with `serde`). Kubios-like = smoothness priors λ = 500 +
+  Welch 300 s (published defaults; λ not checked against a Kubios export).
+- `FrequencyOptions::welch_segment_s` (default 64 s, unchanged behaviour).
+- `respiratory_hf(rri, breathing_bpm, &opts)`: power in a band centred on the breathing rate (± 0.1 Hz,
+  convention), with flags when breathing is below the HF band (< 9 /min: respiratory peak in LF) or
+  above it (> 24 /min). `band_power_rri(rri, band, &opts)`: power of any band with the default
+  resampling and Welch estimate.
+- `motion_context(xyz, reference, &MotionConfig)`: accelerometer context of a window — magnitude mean
+  and SD, ENMO, activity level (rest / light / active / unknown; thresholds are parameters), gravity
+  direction, tilt against a reference vector, posture shift between the two halves of the window and
+  a posture-change flag. `angle_deg(a, b)`.
+
+### Changed (breaking for struct literals)
+- New field `FrequencyOptions::welch_segment_s` (use `..FrequencyOptions::default()`).
+
 ## [0.9.5] - unreleased
 
 ### Added

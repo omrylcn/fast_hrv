@@ -61,6 +61,76 @@ pub struct HrvReport {
     pub fragmentation: crate::fragmentation::Fragmentation,
 }
 
+impl HrvReport {
+    /// A metric by its name in [`crate::METRICS`] (`"rmssd"`, `"lf_hf"`, …); `None` if unknown.
+    pub fn value(&self, name: &str) -> Option<f64> {
+        let (t, f, n, a, g) = (
+            &self.time,
+            &self.frequency,
+            &self.nonlinear,
+            &self.asymmetry,
+            &self.fragmentation,
+        );
+        Some(match name {
+            "mean_nn" => t.mean_nn,
+            "mean_hr" => t.mean_hr,
+            "sd_hr" => t.sd_hr,
+            "rmssd" => t.rmssd,
+            "ln_rmssd" => t.ln_rmssd,
+            "sdsd" => t.sdsd,
+            "cvsd" => t.cvsd,
+            "sdnn" => t.sdnn,
+            "cvnn" => t.cvnn,
+            "pnn50" => t.pnn50,
+            "pnn20" => t.pnn20,
+            "median_nn" => t.median_nn,
+            "mad_nn" => t.mad_nn,
+            "iqr_nn" => t.iqr_nn,
+            "min_nn" => t.min_nn,
+            "max_nn" => t.max_nn,
+            "sdrmssd" => t.sdrmssd,
+            "prc20_nn" => t.prc20_nn,
+            "prc80_nn" => t.prc80_nn,
+            "stress_index" => t.stress_index,
+            "stress_index_sqrt" => t.stress_index_sqrt,
+            "hti" => t.hti,
+            "tinn" => t.tinn,
+            "vlf" => f.vlf,
+            "lf" => f.lf,
+            "hf" => f.hf,
+            "total_power" => f.total_power,
+            "lf_hf" => f.lf_hf,
+            "lnhf" => f.lnhf,
+            "lfnu" => f.lfnu,
+            "hfnu" => f.hfnu,
+            "lf_peak" => f.lf_peak,
+            "hf_peak" => f.hf_peak,
+            "sd1" => n.sd1,
+            "sd2" => n.sd2,
+            "sd1_sd2" => n.sd1_sd2,
+            "csi" => n.csi,
+            "cvi" => n.cvi,
+            "csi_modified" => n.csi_modified,
+            "s" => n.s,
+            "sampen" => n.sampen,
+            "apen" => n.apen,
+            "dfa_alpha1" => n.dfa_alpha1,
+            "dfa_alpha2" => n.dfa_alpha2,
+            "gi" => a.gi,
+            "pi" => a.pi,
+            "sd1d" => a.sd1d,
+            "sd1a" => a.sd1a,
+            "c1d" => a.c1d,
+            "c1a" => a.c1a,
+            "pip" => g.pip,
+            "ials" => g.ials,
+            "pss" => g.pss,
+            "pas" => g.pas,
+            _ => return None,
+        })
+    }
+}
+
 /// NN aralıklarından (ms) bütün metrikler. Kısa kayıtlarda hesaplanamayanlar NaN döner:
 /// zaman alanı ≥ 3 aralık, frekans alanı bant başına HF ≥ 60 sn, LF ≥ 120 sn, VLF ≥ 300 sn (RR toplamı), entropi/DFA ≥ 16 aralık.
 ///
