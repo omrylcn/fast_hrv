@@ -44,8 +44,8 @@
 //! [`crate::gaps::split_at_gaps`] / [`crate::gaps::rri_with_gaps`] on the emitted indices.
 
 use crate::detect::{
-    DualConfig, RefinedPeaks, WindowConfig, detect_windowed, dual_detect, elgendi_peaks,
-    refine_peaks,
+    DualConfig, FiducialMemory, RefinedPeaks, WindowConfig, detect_windowed, dual_detect,
+    elgendi_peaks, refine_peaks,
 };
 use crate::error::HrvError;
 use crate::gaps::Gap;
@@ -331,6 +331,8 @@ pub struct StreamDetector {
     buf_start: u64,
     primary: Dedup,
     secondary: Dedup,
+    /// Fiducial choice across the windows of the current segment.
+    fiducial: FiducialMemory,
     /// Test hook: replaces the primary detector (de-duplication stress tests).
     #[cfg(test)]
     fake: Option<fn(&[f64]) -> RefinedPeaks>,
@@ -372,6 +374,7 @@ impl StreamDetector {
             buf_start: start_index,
             primary: Dedup::new(primary_cap),
             secondary: Dedup::new(secondary_cap),
+            fiducial: FiducialMemory::new(),
             #[cfg(test)]
             fake: None,
         })
@@ -512,6 +515,7 @@ impl StreamDetector {
             .finish(self.w, self.dedup, &mut out.secondary);
         self.buf.clear();
         self.segment_start = next_index;
+        self.fiducial.reset();
         self.next_index = next_index;
         self.next_window = next_index / self.w;
         self.buf_start = next_index;
@@ -557,7 +561,9 @@ impl StreamDetector {
         if let Some(fake) = fake {
             queue(&mut self.primary, &fake(chunk));
         } else if self.cfg.secondary {
-            let d = dual_detect(chunk, fs, &self.cfg.dual)?;
+            let mut d = dual_detect(chunk, fs, &self.cfg.dual)?;
+            self.fiducial
+                .apply(&self.cfg.dual.refine, chunk, fs, &mut d.primary);
             queue(&mut self.primary, &d.primary);
             queue(&mut self.secondary, &d.secondary);
             on_window(&StreamWindow {
@@ -572,7 +578,9 @@ impl StreamDetector {
             });
         } else {
             let raw = elgendi_peaks(chunk, fs, &self.cfg.dual.elgendi)?;
-            let refined = refine_peaks(chunk, fs, &raw, &self.cfg.dual.refine)?;
+            let mut refined = refine_peaks(chunk, fs, &raw, &self.cfg.dual.refine)?;
+            self.fiducial
+                .apply(&self.cfg.dual.refine, chunk, fs, &mut refined);
             queue(&mut self.primary, &refined);
             on_window(&StreamWindow {
                 window: k,

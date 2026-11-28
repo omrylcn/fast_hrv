@@ -10,7 +10,7 @@ annotations (PhysioNet MIT-BIH Arrhythmia Database, ODC-By 1.0). Reported per re
   (N, L, R, e, j); this is what reaches RR intervals,
 - RMSSD over the same beat triplets from the annotations and from the live peaks.
 
-Usage:  python tools/mitdb_timing.py [--records 100 118 ...] [--env SMOOTH_HZ=15] [--out results.json]
+Usage:  python tools/mitdb_timing.py [--records 100 118 ...] [--env SMOOTH_HZ=15 FIDUCIAL=adaptive] [--out results.json]
 Needs:  wfdb, numpy, a Rust toolchain. Records are downloaded to a temporary directory.
 """
 import argparse
@@ -90,7 +90,7 @@ def main():
                   f"jitter {s['jitter_rms_ms']:.2f} ms  RMSSD {s['rmssd_live_ms']:.2f} vs {s['rmssd_reference_ms']:.2f} ms ({err:+.2f} %)",
                   flush=True)
     errs = sorted(abs(100 * (s["rmssd_live_ms"] / s["rmssd_reference_ms"] - 1)) for s in rows)
-    print(f"median |RMSSD error| {errs[len(errs) // 2]:.2f} %, median jitter "
+    print(f"median |RMSSD error| {errs[len(errs) // 2]:.2f} %, mean {sum(errs) / len(errs):.2f} %, median jitter "
           f"{sorted(s['jitter_rms_ms'] for s in rows)[len(rows) // 2]:.2f} ms over {len(rows)} records")
     if a.out:
         json.dump({"env": a.env, "rows": rows}, open(a.out, "w"), indent=1)

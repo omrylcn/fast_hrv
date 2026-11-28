@@ -423,6 +423,43 @@ pub struct RefineConfig {
     /// records) 15 Hz lowered the median RMSSD error from 0.54 % to 0.31 % and helped most on wide
     /// QRS (bundle branch blocks), but was worse on some noisy records; see `tools/mitdb_timing.py`.
     pub smoothing_hz: Option<f64>,
+    /// Which point of the QRS is reported. Default [`Fiducial::Extremum`] (the refined extremum).
+    /// Windowed and streaming detection only; a single [`refine_peaks`] call ignores it.
+    pub fiducial: Fiducial,
+}
+
+/// Fiducial point of each beat (see [`RefineConfig::fiducial`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Fiducial {
+    /// The refined extremum (R peak, or the deepest point when the polarity is negative).
+    Extremum,
+    /// The energy centroid of the QRS: `Σ t·x²(t) / Σ x²(t)` (median-removed) over ±`half_window_s`
+    /// around the extremum, re-centred once. Stable on wide or notched complexes (bundle branch
+    /// blocks), slightly noisier than the extremum on narrow ones.
+    Centroid { half_window_s: f64 },
+    /// The centroid in windows whose median beat is ambiguous (two or more extremes of at least
+    /// `ratio` × the largest, ≥ 20 ms apart, within ±80 ms), the extremum otherwise. The decision is
+    /// the majority of the last `memory_windows` windows of the segment, so the point does not jump
+    /// between methods from window to window. On 18 MIT-BIH records (`tools/mitdb_timing.py`, live
+    /// path, [`Fiducial::ADAPTIVE`]): median |RMSSD error| 0.68 % → 0.42 %, mean 13.4 % → 3.6 %
+    /// (109, LBBB: +145 % → +0.5 %; 118, RBBB: F1 at ±50 ms 81 % → 100 %), at most 0.75 points worse
+    /// on the others. The centroid adds a constant delay of up to ~15 ms on wide complexes, which
+    /// cancels in RR intervals. Frequent ectopy (119: +34 %) is not a fiducial problem.
+    Adaptive {
+        ratio: f64,
+        memory_windows: usize,
+        half_window_s: f64,
+    },
+}
+
+impl Fiducial {
+    /// [`Fiducial::Adaptive`] with the measured defaults (0.4, 6 windows, ±80 ms).
+    pub const ADAPTIVE: Fiducial = Fiducial::Adaptive {
+        ratio: 0.4,
+        memory_windows: 6,
+        half_window_s: 0.08,
+    };
 }
 
 impl Default for RefineConfig {
@@ -432,6 +469,7 @@ impl Default for RefineConfig {
             polarity: Polarity::Auto,
             interpolate: true,
             smoothing_hz: None,
+            fiducial: Fiducial::Extremum,
         }
     }
 }
@@ -682,6 +720,161 @@ pub fn dual_detect(clean: &[f64], fs: f64, cfg: &DualConfig) -> Result<DualDetec
     })
 }
 
+/// Energy centroid of the QRS around each position (samples): the signal minus its median over
+/// `[p − w, p + w]`, squared, weighted mean of the sample index; computed twice (the second window
+/// centred on the first centroid).
+pub fn energy_centroids(
+    signal: &[f64],
+    fs: f64,
+    positions: &[f64],
+    half_window_s: f64,
+) -> Vec<f64> {
+    let n = signal.len();
+    let w = (half_window_s * fs).round().max(1.0) as usize;
+    let once = |c: usize| -> Option<f64> {
+        let (lo, hi) = (c.saturating_sub(w), (c + w).min(n));
+        if hi <= lo + 2 {
+            return None;
+        }
+        let mut seg: Vec<f64> = signal[lo..hi].to_vec();
+        let mut sorted = seg.clone();
+        sorted.sort_by(f64::total_cmp);
+        let med = sorted[sorted.len() / 2];
+        for v in seg.iter_mut() {
+            *v -= med;
+        }
+        let (mut num, mut den) = (0.0, 0.0);
+        for (k, v) in seg.iter().enumerate() {
+            let e = v * v;
+            num += e * (lo + k) as f64;
+            den += e;
+        }
+        (den > 0.0).then(|| num / den)
+    };
+    positions
+        .iter()
+        .map(|&p| {
+            let c = p.round().clamp(0.0, (n.saturating_sub(1)) as f64) as usize;
+            once(c)
+                .and_then(|c1| once(c1.round() as usize))
+                .unwrap_or(p)
+        })
+        .collect()
+}
+
+/// Whether the median beat around `positions` is ambiguous: two or more local extremes of at least
+/// `ratio` × the largest absolute value, ≥ 20 ms apart, within ±80 ms (after a zero-phase 25 Hz
+/// low-pass of the median beat). `None` with fewer than 3 complete beats.
+pub fn ambiguous_morphology(
+    signal: &[f64],
+    fs: f64,
+    positions: &[f64],
+    ratio: f64,
+) -> Option<bool> {
+    let w = (0.08 * fs).round() as usize;
+    let n = signal.len();
+    let beats: Vec<Vec<f64>> = positions
+        .iter()
+        .filter_map(|&p| {
+            let c = p.round() as isize;
+            if c - (w as isize) < 0 || c as usize + w >= n {
+                return None;
+            }
+            let seg = &signal[c as usize - w..c as usize + w];
+            let mut sorted = seg.to_vec();
+            sorted.sort_by(f64::total_cmp);
+            let med = sorted[sorted.len() / 2];
+            Some(seg.iter().map(|v| v - med).collect())
+        })
+        .collect();
+    if beats.len() < 3 {
+        return None;
+    }
+    let len = 2 * w;
+    let median: Vec<f64> = (0..len)
+        .map(|k| {
+            let mut col: Vec<f64> = beats.iter().map(|b| b[k]).collect();
+            col.sort_by(f64::total_cmp);
+            col[col.len() / 2]
+        })
+        .collect();
+    let m = match butter_sos(2, &[25.0_f64.min(0.45 * fs)], BandType::Lowpass, fs) {
+        Ok(sos) => sosfiltfilt(&sos, &median),
+        Err(_) => median,
+    };
+    let top = m.iter().fold(0.0f64, |a, v| a.max(v.abs()));
+    if top == 0.0 {
+        return Some(false);
+    }
+    let sep = (0.02 * fs).round() as usize;
+    let mut kept: Vec<usize> = Vec::new();
+    for i in 1..len - 1 {
+        let ext = (m[i] > m[i - 1] && m[i] >= m[i + 1]) || (m[i] < m[i - 1] && m[i] <= m[i + 1]);
+        if ext && m[i].abs() >= ratio * top && kept.last().is_none_or(|&k| i - k >= sep) {
+            kept.push(i);
+        }
+    }
+    Some(kept.len() >= 2)
+}
+
+/// State of [`Fiducial::Adaptive`] across the windows of one gap-free segment (shared by the windowed
+/// batch functions and [`crate::stream::StreamDetector`], so both give the same peaks).
+#[derive(Debug, Clone, Default)]
+pub struct FiducialMemory {
+    history: std::collections::VecDeque<bool>,
+}
+
+impl FiducialMemory {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Start of a new segment (after a gap).
+    pub fn reset(&mut self) {
+        self.history.clear();
+    }
+
+    /// Replace the positions of `peaks` (refined in `chunk`) by the configured fiducial point.
+    pub fn apply(
+        &mut self,
+        refine: &RefineConfig,
+        chunk: &[f64],
+        fs: f64,
+        peaks: &mut RefinedPeaks,
+    ) {
+        let half = match refine.fiducial {
+            Fiducial::Extremum => return,
+            Fiducial::Centroid { half_window_s } => half_window_s,
+            Fiducial::Adaptive {
+                ratio,
+                memory_windows,
+                half_window_s,
+            } => {
+                if let Some(a) = ambiguous_morphology(chunk, fs, &peaks.positions, ratio) {
+                    self.history.push_back(a);
+                    while self.history.len() > memory_windows.max(1) {
+                        self.history.pop_front();
+                    }
+                }
+                let yes = self.history.iter().filter(|&&a| a).count();
+                if yes * 2 <= self.history.len() || self.history.is_empty() {
+                    return;
+                }
+                half_window_s
+            }
+        };
+        let moved = energy_centroids(chunk, fs, &peaks.positions, half);
+        let mut pairs: Vec<(usize, f64)> = moved
+            .into_iter()
+            .map(|p| (p.round().max(0.0) as usize, p))
+            .collect();
+        pairs.sort_by(|a, b| a.1.total_cmp(&b.1));
+        pairs.dedup_by_key(|p| p.0);
+        peaks.indices = pairs.iter().map(|p| p.0).collect();
+        peaks.positions = pairs.iter().map(|p| p.1).collect();
+    }
+}
+
 // =============================================================================
 // Windowed processing of long recordings
 // =============================================================================
@@ -799,9 +992,12 @@ pub fn elgendi_refined_windowed(
     elgendi: &ElgendiConfig,
     refine: &RefineConfig,
 ) -> Result<Vec<f64>, HrvError> {
+    let mut memory = FiducialMemory::new();
     detect_windowed(clean, fs, start_sample, window, |chunk| {
         let raw = elgendi_peaks(chunk, fs, elgendi)?;
-        Ok(refine_peaks(chunk, fs, &raw, refine)?.positions)
+        let mut r = refine_peaks(chunk, fs, &raw, refine)?;
+        memory.apply(refine, chunk, fs, &mut r);
+        Ok(r.positions)
     })
 }
 
@@ -827,8 +1023,10 @@ pub fn dual_detect_windowed(
     dual: &DualConfig,
 ) -> Result<WindowedDual, HrvError> {
     let mut secondary_per_window: Vec<Vec<f64>> = Vec::new();
+    let mut memory = FiducialMemory::new();
     let primary = detect_windowed(clean, fs, start_sample, window, |chunk| {
-        let d = dual_detect(chunk, fs, dual)?;
+        let mut d = dual_detect(chunk, fs, dual)?;
+        memory.apply(&dual.refine, chunk, fs, &mut d.primary);
         secondary_per_window.push(d.secondary.positions);
         Ok(d.primary.positions)
     })?;

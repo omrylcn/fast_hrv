@@ -60,9 +60,10 @@ pub mod simd;
 mod python;
 
 pub use detect::{
-    DetectorFilter, DualConfig, DualDetection, ElgendiConfig, Polarity, RefineConfig, RefinedPeaks,
-    WindowConfig, WindowedDual, detect_windowed, dual_detect, dual_detect_windowed, elgendi_peaks,
-    elgendi_refined_windowed, refine_peaks,
+    DetectorFilter, DualConfig, DualDetection, ElgendiConfig, Fiducial, FiducialMemory, Polarity,
+    RefineConfig, RefinedPeaks, WindowConfig, WindowedDual, ambiguous_morphology, detect_windowed,
+    dual_detect, dual_detect_windowed, elgendi_peaks, elgendi_refined_windowed, energy_centroids,
+    refine_peaks,
 };
 pub use detrend::{smoothness_priors, smoothness_priors_cutoff_hz, smoothness_priors_trend};
 pub use ecg::{
