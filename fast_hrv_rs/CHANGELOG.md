@@ -2,6 +2,23 @@
 
 All notable changes to this crate. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.7] - unreleased
+
+- `RefineConfig::fiducial` (`Fiducial::{Extremum (default), Centroid, Adaptive}`): which point of the
+  QRS is reported by windowed and streaming detection. `Fiducial::ADAPTIVE` uses the QRS energy centroid
+  in windows whose median beat is ambiguous (two or more comparable extremes within ±80 ms, e.g. bundle
+  branch blocks) and the extremum otherwise, decided by the majority of the last 6 windows of the
+  segment; the memory resets at gaps, so `StreamDetector` stays bit-identical to the batch functions.
+  MIT-BIH, 18 records (`tools/mitdb_timing.py --env FIDUCIAL=adaptive`): median |RMSSD error|
+  0.68 % → 0.42 %, mean 13.4 % → 3.6 %. Opt-in; the default is unchanged.
+- `detect::energy_centroids`, `detect::ambiguous_morphology`, `detect::FiducialMemory`.
+- `examples/peak_timing.rs`: `FIDUCIAL=extremum|centroid|adaptive`; `tools/mitdb_timing.py` prints the
+  mean error too.
+- Documentation: shorter README with a pipeline diagram and figures (speed vs NeuroKit2, fiducial error
+  on MIT-BIH); the reference sections moved to `docs/` (detection, artifacts, metrics, accuracy) and now
+  cover the 0.9.5–0.9.7 additions. `tools/readme_figures.py` redraws the figures from `docs/img/data/`.
+  `examples/window_report.rs`; `examples/readme_quickstart.rs` also compiles the crate README snippets.
+
 ## [0.9.6] - unreleased
 
 ### Added

@@ -29,6 +29,15 @@ fn main() {
     if let Some(fc) = std::env::var("SMOOTH_HZ").ok().and_then(|v| v.parse().ok()) {
         cfg.dual.refine.smoothing_hz = Some(fc);
     }
+    match std::env::var("FIDUCIAL").as_deref() {
+        Ok("centroid") => {
+            cfg.dual.refine.fiducial = fast_hrv::Fiducial::Centroid {
+                half_window_s: 0.08,
+            }
+        }
+        Ok("adaptive") => cfg.dual.refine.fiducial = fast_hrv::Fiducial::ADAPTIVE,
+        _ => {}
+    }
     let mut det = StreamDetector::new(fs, 0, cfg).unwrap();
     let mut peaks = StreamPeaks::default();
     let (mut live, mut sec) = (Vec::new(), Vec::new());
