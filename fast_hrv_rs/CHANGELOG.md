@@ -14,6 +14,10 @@ All notable changes to this crate. The format follows [Keep a Changelog](https:/
 - `detect::energy_centroids`, `detect::ambiguous_morphology`, `detect::FiducialMemory`.
 - `examples/peak_timing.rs`: `FIDUCIAL=extremum|centroid|adaptive`; `tools/mitdb_timing.py` prints the
   mean error too.
+- Documentation: shorter README with a pipeline diagram and figures (speed vs NeuroKit2, fiducial error
+  on MIT-BIH); the reference sections moved to `docs/` (detection, artifacts, metrics, accuracy) and now
+  cover the 0.9.5–0.9.7 additions. `tools/readme_figures.py` redraws the figures from `docs/img/data/`.
+  `examples/window_report.rs`; `examples/readme_quickstart.rs` also compiles the crate README snippets.
 
 ## [0.9.6] - unreleased
 

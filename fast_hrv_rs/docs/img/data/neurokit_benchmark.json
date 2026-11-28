@@ -1,0 +1,172 @@
+{
+ "meta": {
+  "neurokit2": "0.3.0",
+  "numpy": "2.5.5",
+  "python": "3.13.7",
+  "cpu": "Intel i7-9700K",
+  "threads": "1",
+  "fast_hrv": "0.9.1"
+ },
+ "rows": [
+  {
+   "minutes": 1.0,
+   "beats": 69,
+   "neurokit_ms": {
+    "clean": 1.7634669784456491,
+    "peaks": 1.7722140182740986,
+    "kubios": 3.0878320103511214,
+    "hrv_time": 1.8523310427553952,
+    "hrv_frequency": 4.33043297380209,
+    "hrv_all": 25.928514020051807
+   },
+   "fasthrv_ms": {
+    "clean": 0.5292,
+    "peaks": 0.1641,
+    "kubios": 0.0278,
+    "hrv_time": 0.0037,
+    "hrv_frequency": 0.0004,
+    "hrv_all": 0.1007
+   },
+   "speedup": {
+    "clean": 3.3323261119532295,
+    "peaks": 10.799597917575252,
+    "kubios": 111.07309389752236,
+    "hrv_time": 500.63001155551217,
+    "hrv_frequency": 10826.082434505224,
+    "hrv_all": 257.4827608743973
+   },
+   "pipeline_ms": {
+    "neurokit": 32.552027027122676,
+    "fasthrv": 0.8218
+   },
+   "agreement": {
+    "peaks_within_2_samples": 1.0,
+    "rmssd_rel_diff": 0.0,
+    "sdnn_rel_diff": 1.4369496800353176e-16,
+    "sampen_rel_diff": 0.0,
+    "lf_hf_fasthrv": null,
+    "lf_hf_neurokit": 0.4592136103927954
+   }
+  },
+  {
+   "minutes": 5.0,
+   "beats": 350,
+   "neurokit_ms": {
+    "clean": 4.4218169641681015,
+    "peaks": 7.77920096879825,
+    "kubios": 10.745628038421273,
+    "hrv_time": 2.1227350225672126,
+    "hrv_frequency": 7.669673999771476,
+    "hrv_all": 382.9181980108842
+   },
+   "fasthrv_ms": {
+    "clean": 2.886,
+    "peaks": 0.8226,
+    "kubios": 0.3261,
+    "hrv_time": 0.0186,
+    "hrv_frequency": 0.0482,
+    "hrv_all": 2.0686
+   },
+   "speedup": {
+    "clean": 1.5321611102453574,
+    "peaks": 9.456845330413627,
+    "kubios": 32.95194124017563,
+    "hrv_time": 114.12553884769962,
+    "hrv_frequency": 159.12186721517585,
+    "hrv_all": 185.10983177554107
+   },
+   "pipeline_ms": {
+    "neurokit": 405.86484398227185,
+    "fasthrv": 6.1033
+   },
+   "agreement": {
+    "peaks_within_2_samples": 1.0,
+    "rmssd_rel_diff": 0.0,
+    "sdnn_rel_diff": 1.7267596610801974e-16,
+    "sampen_rel_diff": 1.54988896088978e-16,
+    "lf_hf_fasthrv": 0.8925816994274628,
+    "lf_hf_neurokit": 0.8532141085664264
+   }
+  },
+  {
+   "minutes": 30.0,
+   "beats": 2100,
+   "neurokit_ms": {
+    "clean": 22.501248982734978,
+    "peaks": 45.9892219514586,
+    "kubios": 62.79932998586446,
+    "hrv_time": 5.551824986469001,
+    "hrv_frequency": 46.41375597566366,
+    "hrv_all": 12675.828912004363
+   },
+   "fasthrv_ms": {
+    "clean": 19.9121,
+    "peaks": 6.2749,
+    "kubios": 2.7891,
+    "hrv_time": 0.0769,
+    "hrv_frequency": 0.2731,
+    "hrv_all": 66.1543
+   },
+   "speedup": {
+    "clean": 1.1300289262676955,
+    "peaks": 7.329076471570639,
+    "kubios": 22.515983645571854,
+    "hrv_time": 72.19538343912875,
+    "hrv_frequency": 169.95150485413276,
+    "hrv_all": 191.61005274040178
+   },
+   "pipeline_ms": {
+    "neurokit": 12807.11871292442,
+    "fasthrv": 95.13040000000001
+   },
+   "agreement": {
+    "peaks_within_2_samples": 1.0,
+    "rmssd_rel_diff": 0.0,
+    "sdnn_rel_diff": 3.1105820025166507e-16,
+    "sampen_rel_diff": 0.0,
+    "lf_hf_fasthrv": 0.559261389223915,
+    "lf_hf_neurokit": 0.6077972839972897
+   }
+  },
+  {
+   "minutes": 60.0,
+   "beats": 4201,
+   "neurokit_ms": {
+    "clean": 60.400555026717484,
+    "peaks": 113.51473204558715,
+    "kubios": 89.9818729958497,
+    "hrv_time": 9.837377001531422,
+    "hrv_frequency": 59.1216660104692,
+    "hrv_all": 50646.92158001708
+   },
+   "fasthrv_ms": {
+    "clean": 48.2811,
+    "peaks": 16.7182,
+    "kubios": 4.3048,
+    "hrv_time": 0.1508,
+    "hrv_frequency": 0.5566,
+    "hrv_all": 286.3207
+   },
+   "speedup": {
+    "clean": 1.2510186186047434,
+    "peaks": 6.789889584141065,
+    "kubios": 20.902683747409796,
+    "hrv_time": 65.2345955008715,
+    "hrv_frequency": 106.2193065225821,
+    "hrv_all": 176.88878792213444
+   },
+   "pipeline_ms": {
+    "neurokit": 50910.81874008523,
+    "fasthrv": 355.6248
+   },
+   "agreement": {
+    "peaks_within_2_samples": 1.0,
+    "rmssd_rel_diff": 0.0,
+    "sdnn_rel_diff": 3.972127282965748e-15,
+    "sampen_rel_diff": 1.5594797641812038e-16,
+    "lf_hf_fasthrv": 0.5625492983180765,
+    "lf_hf_neurokit": 0.5816411120852067
+   }
+  }
+ ]
+}

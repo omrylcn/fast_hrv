@@ -1,293 +1,122 @@
 # fast_hrv
 
-Fast HRV analysis library. R-peak detection, artifact correction, and HRV metrics from ECG signals.
+Heart rate variability (HRV) from ECG: R-peak detection, artifact handling and HRV metrics, with results
+that match NeuroKit2 where the methods are the same, at a fraction of the time.
 
-## Performance
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="fast_hrv_rs/docs/img/speed-dark.svg">
+  <img alt="Full pipeline time, NeuroKit2 vs fast-hrv: 1 min ECG 32.6 ms vs 0.82 ms (40× faster), 5 min 406 ms vs 6.1 ms (66×), 30 min 12.8 s vs 95 ms (135×), 60 min 50.9 s vs 356 ms (143×)" src="fast_hrv_rs/docs/img/speed-light.svg" width="720">
+</picture>
 
-Rust crate (`fast_hrv_rs`, v0.9.1) against NeuroKit2 0.3.0 on the same 512 Hz synthetic ECG
-(`nk.ecg_simulate`, 70 bpm), one thread, median of repeated runs. Steps: cleaning, R peaks, Kubios
-correction and all HRV metrics (time + frequency + nonlinear).
+<sub>Cleaning, R peaks, Kubios correction and all HRV metrics on a 512 Hz synthetic ECG, one thread,
+NeuroKit2 0.3.0 vs the Rust crate 0.9.1 (Intel i7-9700K). Same R peaks; RMSSD, SDNN and SampEn equal to
+&lt; 1e-14. Reproduce: `OMP_NUM_THREADS=1 python fast_hrv_rs/tools/neurokit_benchmark.py --minutes 1 5 30 60`.</sub>
 
-| Record | Beats | NeuroKit2 | fast-hrv (Rust) | Faster |
-|--------|-------|-----------|-----------------|--------|
-| 1 min  | 69    | 32.6 ms   | 0.82 ms         | 40×    |
-| 5 min  | 350   | 406 ms    | 6.1 ms          | 66×    |
-| 30 min | 2100  | 12.8 s    | 95 ms           | 135×   |
-| 60 min | 4201  | 50.9 s    | 356 ms          | 143×   |
+## Three ways to use it
 
-Per step on the 60 min record: cleaning 1.25×, R peaks 6.8×, Kubios correction 21×, time domain 65×,
-frequency domain 106×, all HRV metrics 177× faster. Same result: R peaks 100 % identical (±2 samples),
-RMSSD / SDNN / SampEn identical (difference < 1e-14); LF/HF differs by 3–8 % (spectral estimation
-details). fast-hrv computes LF only from 120 s of data (technical minimum: about ten cycles of the lowest LF
-frequency) and its metric catalogue (`METRICS`) marks LF and LF/HF reportable from 180 s, 300 s recommended.
+| Package | For | Install |
+|---|---|---|
+| **[`fast-hrv`](fast_hrv_rs/README.md)** (Rust crate in `fast_hrv_rs/`) | the full library: streaming, signal quality, artifact exclusion, per-window report, breathing and motion context | `cargo add fast-hrv --git https://github.com/omrylcn/fast_hrv` |
+| **`fast_hrv_rs`** (Python binding of the crate) | the classic pipeline from Python at Rust speed | `cd fast_hrv_rs && maturin develop --release --features python` |
+| **`fast_hrv`** (pure Python, `fast_hrv/`) | NumPy code that is easy to read and change; an optional Numba version | `uv pip install numpy scipy neurokit2` (+ `numba`) |
 
-Reproduce: `OMP_NUM_THREADS=1 python fast_hrv_rs/tools/neurokit_benchmark.py --minutes 1 5 30 60`
-(needs `neurokit2` and a Rust toolchain). The Python packages (`fast_hrv` NumPy / Numba) were not
-re-measured in this run.
+The Rust crate is where new work happens; its README describes the whole pipeline:
+**[fast_hrv_rs/README.md](fast_hrv_rs/README.md)**.
 
-## Options
+## Quick start
 
-| Option | Note |
-|--------|------|
-| **fast_hrv (NumPy)** | Pure Python, few dependencies |
-| **fast_hrv (Numba)** | First call slow (JIT warm-up) |
-| **fast_hrv_rs (binding)** | Rust core from Python (PyO3), needs a Rust build |
-| **fast_hrv_rs (native)** | Rust crate; streaming, signal quality, full metric set |
+Rust:
 
----
+```rust
+use fast_hrv::*;
 
-## Installation
-
-### fast_hrv (Python)
-
-```bash
-# Dependencies
-uv pip install numpy scipy neurokit2
-
-# For Numba (optional, but recommended)
-uv pip install numba
+let result = process_ecg(&ecg_signal, 512, true);          // clean, R peaks, Kubios correction
+let report = hrv(&rri_from_peaks(&result.rpeaks, 512));    // 54 metrics
+println!("RMSSD {:.1} ms  SDNN {:.1} ms", report.time.rmssd, report.time.sdnn);
 ```
 
-### fast_hrv_rs (Rust → Python binding)
-
-```bash
-cd fast_hrv_rs
-
-# Install with Maturin
-pip install maturin
-maturin develop --release
-
-# or with uv
-uv pip install maturin
-uv run maturin develop --release
-```
-
-### fast_hrv_rs (Native Rust)
-
-```bash
-cd fast_hrv_rs
-cargo build --release
-
-# With SIMD optimizations
-cargo build --release --features simd
-```
-
----
-
-## Quick Start
-
-### Option 1: fast_hrv NumPy
-
-```python
-from fast_hrv.ecg import process_ecg
-
-result = process_ecg(ecg_signal, sampling_rate=512, correct_artifacts=True)
-
-print(f"R-peaks: {len(result['rpeaks'])}")
-print(f"Mean HR: {result['stats']['mean_hr_bpm']:.1f} bpm")
-print(f"RMSSD: {result['stats']['rmssd_ms']:.2f} ms")
-```
-
-### Option 2: fast_hrv Numba (Faster)
-
-```python
-from fast_hrv.ecg_numba import process_ecg
-
-result = process_ecg(ecg_signal, sampling_rate=512, correct_artifacts=True)
-
-print(f"R-peaks: {len(result['rpeaks'])}")
-print(f"SDNN: {result['stats']['sdnn_ms']:.2f} ms")
-```
-
-### Option 3: fast_hrv_rs Python Binding (Fastest)
+Python, through the Rust binding:
 
 ```python
 import numpy as np
 import fast_hrv_rs
 
 result = fast_hrv_rs.process_ecg(ecg_signal, 512, True)
+print(len(result["rpeaks"]), result["stats"]["rmssd_ms"])
 
-print(f"R-peaks: {len(result['rpeaks'])}")
-print(f"RMSSD: {result['stats']['rmssd_ms']:.2f} ms")
-
-# HRV metrics only
-rr = np.array([800.0, 810.0, 795.0, 805.0])
-metrics = fast_hrv_rs.hrv_metrics(rr)
+metrics = fast_hrv_rs.hrv_metrics(np.array([800.0, 810.0, 795.0, 805.0]))  # from RR intervals (ms)
 ```
 
-### Option 4: fast_hrv_rs Native Rust
-
-```rust
-use fast_hrv::*; // crate `fast-hrv` (fast_hrv_rs/), library name `fast_hrv`
-
-let result = process_ecg(&ecg_signal, 512, true);
-
-println!("R-peaks: {}", result.rpeaks.len());
-println!("RMSSD: {:.2} ms", result.stats.rmssd_ms);
-```
-
----
-
-## Features
-
-The Rust crate is the most complete; see [`fast_hrv_rs/README.md`](fast_hrv_rs/README.md) for the full API.
-
-- **Cleaning:** NeuroKit2-compatible zero-phase cleaning (0.5 Hz high-pass + powerline moving average),
-  a causal streaming filter (0.5–40 Hz, optional adaptive 50/60 Hz notch); live packet-by-packet output is
-  bit-identical to processing the whole record.
-- **R peaks:** NeuroKit2 method, Elgendi (reproduces NeuroKit2's presets), sub-sample refinement, two
-  detectors with their agreement (bSQI), a streaming detector with the same output.
-- **Artifacts:** Kubios correction (Lipponen & Tarvainen 2019, NeuroKit2-equivalent output) or an exclusion
-  mode that removes ectopic / suspect beats without moving any.
-- **Signal quality:** flat line, saturation, kSQI, pSQI, basSQI, bSQI, template correlation, RR plausibility.
-- **HRV metrics:** time domain (incl. lnRMSSD, Baevsky stress index), frequency domain (FFT and
-  Lomb–Scargle), nonlinear (SampEn, ApEn, DFA, Poincaré, CSI/CVI), asymmetry, fragmentation; a minimum
-  window rule for every metric.
-- **Breathing rate from ECG** (R amplitude + RR modulation).
-
----
-
-## Project Structure
-
-```
-bio_works/
-├── fast_hrv/                    # Python package
-│   ├── __init__.py
-│   ├── ecg.py                   # ECG processing (NumPy)
-│   ├── ecg_numba.py             # ECG processing (Numba JIT)
-│   ├── peaks.py                 # Peak detection (NumPy)
-│   ├── peaks_numba.py           # Peak detection (Numba JIT)
-│   ├── hrv.py                   # HRV metrics
-│   └── utils.py                 # Utility functions
-│
-├── fast_hrv_rs/                 # Rust package
-│   ├── src/
-│   │   ├── lib.rs               # Main module
-│   │   ├── ecg.rs               # ECG processing
-│   │   ├── peaks.rs             # Peak detection
-│   │   ├── hrv.rs               # HRV metrics
-│   │   ├── simd.rs              # SIMD optimizations
-│   │   └── python.rs            # PyO3 bindings
-│   ├── Cargo.toml
-│   └── pyproject.toml           # Maturin config
-│
-└── README.md                    # This file
-```
-
----
-
-## API Reference
-
-### fast_hrv (Python)
+Pure Python:
 
 ```python
-# ECG processing
-from fast_hrv.ecg import process_ecg, ecg_clean, compute_quality
-from fast_hrv.ecg_numba import process_ecg  # Numba version
+from fast_hrv.ecg import process_ecg          # or fast_hrv.ecg_numba (first call compiles)
 
-# Peak detection
-from fast_hrv.peaks import ecg_peaks, find_peaks, fix_peaks
-from fast_hrv.peaks_numba import ecg_peaks  # Numba version
-
-# HRV metrics
-from fast_hrv.hrv import (
-    compute_hrv,               # all metrics from R-peak sample indices: compute_hrv(rpeaks, sampling_rate)
-    compute_time_domain,       # from NN intervals in ms: SDNN, RMSSD, pNN50...
-    compute_poincare,          # SD1, SD2...
-    compute_sampen, compute_apen, compute_dfa,
-    compute_frequency_domain,  # VLF, LF, HF, LF/HF
-)
+result = process_ecg(ecg_signal, sampling_rate=512, correct_artifacts=True)
+print(result["stats"]["rmssd_ms"])
 ```
 
-### fast_hrv_rs (Python binding)
+## What is in the Rust crate
 
-```python
-import fast_hrv_rs
-
-# ECG processing
-fast_hrv_rs.process_ecg(signal, sampling_rate, correct_artifacts)
-fast_hrv_rs.ecg_clean(signal, sampling_rate)
-fast_hrv_rs.find_peaks(signal, sampling_rate)
-fast_hrv_rs.fix_peaks(peaks, sampling_rate)
-
-# HRV metrics
-fast_hrv_rs.hrv_metrics(rr)  # All metrics
-fast_hrv_rs.rmssd(rr)
-fast_hrv_rs.sdnn(rr)
-fast_hrv_rs.pnn50(rr)
-fast_hrv_rs.sampen(rr, m, r)
-fast_hrv_rs.dfa_alpha1(rr)
-fast_hrv_rs.poincare_sd1(rr)
-```
-
-### fast_hrv_rs (Native Rust)
-
-```rust
-use fast_hrv::*; // crate `fast-hrv` (fast_hrv_rs/), library name `fast_hrv`
-
-// ECG processing
-process_ecg(&signal, sampling_rate, correct_artifacts);
-ecg_clean(&signal, sampling_rate);
-find_peaks_default(&signal, sampling_rate);
-fix_peaks_default(&peaks, sampling_rate);
-
-// HRV metrics
-compute_rmssd(&rr);
-std_ddof(&rr, 1);  // SDNN
-compute_pnn50(&rr);
-compute_sampen(&rr, 2, Some(0.2));
-compute_dfa(&rr, (4, 16), (16, None));
-compute_poincare(&rr);
-```
-
----
+- **Cleaning**: NeuroKit2-identical zero-phase filtering, and a causal filter for live data whose
+  packet-by-packet output equals the whole-record output bit for bit.
+- **R peaks**: NeuroKit2 and Elgendi detectors, sub-sample refinement, a choice of fiducial point that keeps
+  wide QRS complexes stable, and a streaming detector that returns exactly the batch result.
+- **Artifacts**: Kubios correction with a record of every changed beat, or an exclusion mode that leaves
+  ectopic beats in place and drops the intervals around them.
+- **Metrics**: time domain, frequency domain (Welch, Lomb–Scargle, NeuroKit2-compatible), Poincaré,
+  entropy, DFA, asymmetry, fragmentation; smoothness-priors detrending; named presets with a provenance
+  record.
+- **Context**: signal quality indices, breathing rate from the ECG, accelerometer activity and posture.
+- **Window rules**: each metric's minimum and recommended window length, and a per-window verdict
+  (valid / warning / suppressed) with the reasons.
 
 ## Accuracy
 
-Against NeuroKit2 0.3.0 on 1, 5, 30 and 60 min synthetic records (benchmark above): R peaks identical
-(±2 samples) in all records; RMSSD, SDNN and SampEn identical to < 1e-14 relative. LF/HF: the default (Task Force / Kubios practice,
-4 Hz cubic spline, 64 s Welch segments) differs from NeuroKit2 by a few percent because of the window length;
-`frequency_domain_neurokit` reproduces `nk.hrv_frequency` (LF/HF ≤ 3e-13 relative).
-The Rust test suite checks NeuroKit2 parity on fixtures (`fast_hrv_rs/tests/neurokit_parity.rs`).
-Agreement with NeuroKit2 shows the methods are implemented as specified; accuracy against a reference
-device (e.g. a chest strap or Holter) is a separate validation and not claimed here.
+Agreement with NeuroKit2 on the same input is tested in CI (`fast_hrv_rs/tests/`). On annotated real ECG
+(MIT-BIH Arrhythmia, 18 records), the live detector's median RMSSD error is 0.7 % against the annotated
+beats with the default fiducial point and 0.4 % with the adaptive one. Validation against a reference device
+in the field is not claimed yet. Details: [fast_hrv_rs/docs/accuracy.md](fast_hrv_rs/docs/accuracy.md).
 
----
+## Repository layout
+
+```text
+fast_hrv/          pure Python package (NumPy, Numba)
+fast_hrv_rs/       Rust crate `fast-hrv` (+ PyO3 binding `fast_hrv_rs`)
+  src/             library
+  tests/           parity and equivalence tests (synthetic signals)
+  tools/           reference generators, NeuroKit2 benchmark, MIT-BIH timing
+  docs/            detailed documentation and README figures
+```
 
 ## Tests
 
 ```bash
-# Python binding: build the wheel, install it and run the smoke test from outside the repository
 cd fast_hrv_rs
+cargo test --release                      # NeuroKit2 / SciPy parity, stream = batch, …
+
+# Python binding: build the wheel, install it, run the smoke test outside the repository
 maturin build --release --out dist && pip install dist/*.whl
 (cd /tmp && python "$OLDPWD/tests/python/smoke.py")
-
-# Rust tests (195 tests, incl. NeuroKit2 parity and streaming = batch)
-cd fast_hrv_rs
-cargo test --release
-
-# Speed and agreement against NeuroKit2
-OMP_NUM_THREADS=1 python tools/neurokit_benchmark.py --minutes 1 5 30 60
 ```
-
----
-
-## References
-
-- **NeuroKit2**: Makowski et al. (2021) - "NeuroKit2: A Python toolbox for neurophysiological signal processing"
-- **Artifact Correction**: Lipponen & Tarvainen (2019) - "A robust algorithm for heart rate variability time series artefact correction"
-- **HRV Guidelines**: Task Force (1996) - "Heart rate variability: standards of measurement"
-- **DFA**: Peng et al. (1995) - "Quantification of scaling exponents and crossover phenomena"
-- **Sample Entropy**: Richman & Moorman (2000)
-
----
-
-
 
 ## Roadmap
 
-- [x] Frequency-domain HRV (LF, HF, LF/HF; FFT and Lomb–Scargle)
-- [x] Streaming / real-time mode (bit-identical to batch)
-- [x] LF/HF difference to NeuroKit2 explained (window length, interpolation, band integration); `frequency_domain_neurokit` reproduces NeuroKit2 (≤ 3e-13)
+- [x] Frequency domain (Welch, Lomb–Scargle, NeuroKit2-compatible)
+- [x] Streaming mode, bit-identical to batch
+- [x] Per-window verdicts, presets with provenance, breathing and motion context
 - [ ] Validation against a reference device
-- [ ] Published packages (crates.io, PyPI) and pre-built wheels (manylinux, macOS, Windows)
+- [ ] Published packages (crates.io, PyPI) and pre-built wheels
+
+## References
+
+- Makowski et al. (2021). NeuroKit2: A Python toolbox for neurophysiological signal processing.
+- Lipponen & Tarvainen (2019). A robust algorithm for heart rate variability time series artefact correction.
+- Task Force (1996). Heart rate variability: standards of measurement, physiological interpretation and clinical use.
+- Tarvainen et al. (2002). An advanced detrending method with application to HRV analysis.
+- Shaffer & Ginsberg (2017). An overview of heart rate variability metrics and norms.
+- Moody & Mark (2001). The impact of the MIT-BIH Arrhythmia Database. PhysioNet.
+
+## License
+
+The Rust crate is licensed under MIT or Apache-2.0 at your option ([fast_hrv_rs/LICENSE-MIT](fast_hrv_rs/LICENSE-MIT), [fast_hrv_rs/LICENSE-APACHE](fast_hrv_rs/LICENSE-APACHE)).
