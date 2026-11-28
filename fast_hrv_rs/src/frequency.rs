@@ -316,6 +316,35 @@ pub(crate) fn bands_to_domain_pub(
     bands_to_domain(freqs, psd, vlf, lf, hf)
 }
 
+/// Power (ms²) of the RR series in an arbitrary band `(lo, hi)` Hz, with the same resampling and Welch
+/// estimate as [`frequency_domain_with`] (exact integration up to the band edges). NaN when the record
+/// is shorter than ten cycles of `lo` (at least 60 s) or the series is invalid.
+pub fn band_power_rri(rri: &[f64], band: (f64, f64), opts: &FrequencyOptions) -> f64 {
+    if rri.len() < 10
+        || rri.iter().any(|r| !(r.is_finite() && *r > 0.0))
+        || band.1.partial_cmp(&band.0) != Some(std::cmp::Ordering::Greater)
+    {
+        return f64::NAN;
+    }
+    let record_s = rri.iter().sum::<f64>() / 1000.0;
+    if record_s < (10.0 / band.0.max(1e-9)).max(60.0) {
+        return f64::NAN;
+    }
+    let mut t = Vec::with_capacity(rri.len());
+    let mut acc = 0.0;
+    for &r in rri {
+        acc += r / 1000.0;
+        t.push(acc);
+    }
+    let duration = t[t.len() - 1] - t[0];
+    let n = (duration * RESAMPLE_HZ).floor() as usize + 1;
+    let grid: Vec<f64> = (0..n).map(|i| t[0] + i as f64 / RESAMPLE_HZ).collect();
+    let resampled = cubic_spline(&t, rri, &grid);
+    let nperseg = (opts.welch_segment_s * RESAMPLE_HZ).round().max(8.0) as usize;
+    let (freqs, psd) = welch(&resampled, RESAMPLE_HZ, nperseg);
+    band_power(&freqs, &psd, band)
+}
+
 /// Builds the result from the band powers (shared by Welch and Lomb–Scargle).
 fn bands_to_domain(freqs: &[f64], psd: &[f64], vlf: f64, lf: f64, hf: f64) -> FrequencyDomain {
     let positive = |p: f64| p.is_finite() && p > 0.0;

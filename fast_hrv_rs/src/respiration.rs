@@ -193,6 +193,49 @@ pub fn hf_band_for(rate_bpm: f64, half_width_hz: f64, floor_hz: f64) -> (f64, f6
     ((f - half_width_hz).max(floor_hz), f + half_width_hz)
 }
 
+/// HF power measured around the breathing rate, and where the breathing rate lies relative to the
+/// fixed bands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct RespiratoryHf {
+    pub rate_bpm: f64,
+    /// Band used (Hz): breathing frequency ± 0.1 Hz, lower edge at least 0.04 Hz.
+    pub band: (f64, f64),
+    /// Power in that band (ms²) and its natural log.
+    pub power: f64,
+    pub ln_power: f64,
+    /// Breathing below 0.15 Hz (9 /min): the respiratory peak is in the LF band, so fixed-band HF
+    /// misses vagal power and LF and LF/HF are inflated.
+    pub in_lf_band: bool,
+    /// Breathing above 0.4 Hz (24 /min): part of the respiratory power is above the HF band.
+    pub above_hf_band: bool,
+}
+
+/// [`RespiratoryHf`] for an RR series (ms) and a breathing rate (breaths/min, e.g. from
+/// [`respiratory_rate`]). The ±0.1 Hz width is a convention (no validated width was found); the
+/// result is meant to be read next to the fixed-band HF, not instead of it.
+pub fn respiratory_hf(
+    rri_ms: &[f64],
+    rate_bpm: f64,
+    opts: &crate::frequency::FrequencyOptions,
+) -> RespiratoryHf {
+    let band = hf_band_for(rate_bpm, 0.1, 0.04);
+    let power = if rate_bpm.is_finite() && rate_bpm > 0.0 {
+        crate::frequency::band_power_rri(rri_ms, band, opts)
+    } else {
+        f64::NAN
+    };
+    let f = rate_bpm / 60.0;
+    RespiratoryHf {
+        rate_bpm,
+        band,
+        power,
+        ln_power: if power > 0.0 { power.ln() } else { f64::NAN },
+        in_lf_band: f < 0.15,
+        above_hf_band: f > 0.4,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

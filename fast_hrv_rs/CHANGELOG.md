@@ -17,6 +17,14 @@ All notable changes to this crate. The format follows [Keep a Changelog](https:/
   method, intervals, duration; serialisable with `serde`). Kubios-like = smoothness priors λ = 500 +
   Welch 300 s (published defaults; λ not checked against a Kubios export).
 - `FrequencyOptions::welch_segment_s` (default 64 s, unchanged behaviour).
+- `respiratory_hf(rri, breathing_bpm, &opts)`: power in a band centred on the breathing rate (± 0.1 Hz,
+  convention), with flags when breathing is below the HF band (< 9 /min: respiratory peak in LF) or
+  above it (> 24 /min). `band_power_rri(rri, band, &opts)`: power of any band with the default
+  resampling and Welch estimate.
+- `motion_context(xyz, reference, &MotionConfig)`: accelerometer context of a window — magnitude mean
+  and SD, ENMO, activity level (rest / light / active / unknown; thresholds are parameters), gravity
+  direction, tilt against a reference vector, posture shift between the two halves of the window and
+  a posture-change flag. `angle_deg(a, b)`.
 
 ### Changed (breaking for struct literals)
 - New field `FrequencyOptions::welch_segment_s` (use `..FrequencyOptions::default()`).
